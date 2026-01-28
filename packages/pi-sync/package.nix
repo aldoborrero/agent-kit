@@ -20,7 +20,13 @@ stdenvNoCC.mkDerivation {
     install -Dm755 pi-sync $out/bin/pi-sync
 
     wrapProgram $out/bin/pi-sync \
-      --prefix PATH : ${lib.makeBinPath [ coreutils findutils gnused ]}
+      --prefix PATH : ${
+        lib.makeBinPath [
+          coreutils
+          findutils
+          gnused
+        ]
+      }
 
     runHook postInstall
   '';
