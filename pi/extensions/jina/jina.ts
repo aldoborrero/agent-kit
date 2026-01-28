@@ -3,7 +3,7 @@ import { Type } from "@sinclair/typebox";
 
 export default function (pi: ExtensionAPI) {
   pi.registerTool({
-    name: "fetch_url",
+    name: "jina",
     description:
       "Fetch a webpage and return its content as markdown. Use this to read web pages, documentation, articles, etc.",
     parameters: Type.Object({

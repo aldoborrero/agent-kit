@@ -3,7 +3,9 @@
   perSystem,
 }:
 pkgs.mkShellNoCC {
-  packages = [ ];
+  packages = [
+    perSystem.self.pi-sync
+  ];
   shellHook = ''
     export PRJ_ROOT=$PWD
   '';
