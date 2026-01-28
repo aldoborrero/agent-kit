@@ -20,6 +20,7 @@ import type {
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import type { Database as SqlJsDatabase, SqlJsStatic, SqlValue } from "sql.js";
 
 // Events not exported from pi-coding-agent, define inline
 interface ModelSelectEvent {
@@ -34,18 +35,6 @@ interface InputEvent {
   text: string;
   images?: Array<{ type: "image"; data: string; mimeType: string }>;
   source: "interactive" | "rpc" | "extension";
-}
-
-// sql.js types (loaded dynamically)
-interface SqlJsDatabase {
-  run(sql: string, params?: unknown[]): void;
-  exec(sql: string): void;
-  export(): Uint8Array;
-  close(): void;
-}
-
-interface SqlJsStatic {
-  Database: new (data?: ArrayLike<number>) => SqlJsDatabase;
 }
 
 // Max result size to store (50KB)
@@ -204,7 +193,7 @@ function persistDatabase(): void {
 }
 
 // Helper: Safe database operation
-function safeRun(sql: string, params: unknown[] = []): void {
+function safeRun(sql: string, params: SqlValue[] = []): void {
   if (!db) return;
 
   try {
