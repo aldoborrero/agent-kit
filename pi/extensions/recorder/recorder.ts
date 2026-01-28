@@ -1,8 +1,8 @@
 /**
  * Recorder Extension
  *
- * Records all session activity to SQLite for recorder, performance tracking,
- * and analytics. Uses sql.js (pure JavaScript SQLite) for portability.
+ * Records all session activity to SQLite for performance tracking and analytics.
+ * Uses better-sqlite3 (native SQLite bindings) for direct file-backed storage.
  *
  * Database location: ~/.pi/agent/recorder.db
  *
@@ -19,8 +19,7 @@ import type {
 } from "@mariozechner/pi-coding-agent";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { existsSync, mkdirSync, readFileSync, writeFileSync, renameSync } from "node:fs";
-import type { Database as SqlJsDatabase, SqlJsStatic, SqlValue } from "sql.js";
+import { existsSync, mkdirSync } from "node:fs";
 
 // Events not exported from pi-coding-agent, define inline
 interface ModelSelectEvent {
@@ -37,13 +36,28 @@ interface InputEvent {
   source: "interactive" | "rpc" | "extension";
 }
 
+// better-sqlite3 types (loaded dynamically)
+interface BetterSqlite3Database {
+  exec(sql: string): this;
+  prepare(sql: string): BetterSqlite3Statement;
+  pragma(pragma: string, options?: { simple?: boolean }): unknown;
+  close(): void;
+}
+
+interface BetterSqlite3Statement {
+  run(...params: unknown[]): { changes: number; lastInsertRowid: number | bigint };
+}
+
+type BetterSqlite3Constructor = new (
+  filename: string,
+  options?: Record<string, unknown>,
+) => BetterSqlite3Database;
+
 // Max result size to store (50KB)
 const MAX_RESULT_SIZE = 50 * 1024;
 
-// Schema
+// Schema (PRAGMA set separately via db.pragma())
 const SCHEMA = `
-PRAGMA foreign_keys = ON;
-
 CREATE TABLE IF NOT EXISTS sessions (
     id TEXT PRIMARY KEY,
     session_file TEXT,
@@ -122,9 +136,9 @@ CREATE INDEX IF NOT EXISTS idx_turns_started ON turns(started_at);
 `;
 
 // State
-let db: SqlJsDatabase | null = null;
-let SQL: SqlJsStatic | null = null;
-let dbPath: string = "";
+let db: BetterSqlite3Database | null = null;
+let moduleAvailable = true;
+let moduleError: string | null = null;
 
 let state = {
   sessionId: null as string | null,
@@ -133,45 +147,17 @@ let state = {
   toolCallStarts: new Map<string, number>(),
 };
 
-// Track if sql.js is available
-let sqlJsAvailable = true;
-let sqlJsError: string | null = null;
-
-// Debounced persistence
-let dirty = false;
-let persistTimer: ReturnType<typeof setInterval> | null = null;
-const PERSIST_INTERVAL_MS = 5000;
-
-function markDirty(): void {
-  dirty = true;
-}
-
-function startPersistTimer(): void {
-  if (persistTimer) return;
-  persistTimer = setInterval(persistDatabase, PERSIST_INTERVAL_MS);
-}
-
-function stopPersistTimer(): void {
-  if (persistTimer) {
-    clearInterval(persistTimer);
-    persistTimer = null;
-  }
-}
-
-// Helper: Load sql.js dynamically
-async function loadSqlJs(): Promise<SqlJsStatic> {
-  if (SQL) return SQL;
-  if (!sqlJsAvailable) throw new Error(sqlJsError || "sql.js not available");
+// Helper: Load better-sqlite3 dynamically
+async function loadBetterSqlite3(): Promise<BetterSqlite3Constructor> {
+  if (!moduleAvailable) throw new Error(moduleError || "better-sqlite3 not available");
 
   try {
-    // Import sql.js and initialize with WASM
-    const initSqlJs = (await import("sql.js")).default;
-    SQL = await initSqlJs({});
-    return SQL;
-  } catch (e) {
-    sqlJsAvailable = false;
-    sqlJsError = `sql.js not installed. Run: cd pi/extensions/recorder && npm install`;
-    throw new Error(sqlJsError);
+    const mod = await import("better-sqlite3");
+    return mod.default as BetterSqlite3Constructor;
+  } catch {
+    moduleAvailable = false;
+    moduleError = "better-sqlite3 not installed. Run: cd pi/extensions/recorder && npm install";
+    throw new Error(moduleError);
   }
 }
 
@@ -179,62 +165,47 @@ async function loadSqlJs(): Promise<SqlJsStatic> {
 async function initDatabase(): Promise<void> {
   if (db) return;
 
-  const sqljs = await loadSqlJs();
+  const Database = await loadBetterSqlite3();
 
   const piDir = join(homedir(), ".pi", "agent");
   if (!existsSync(piDir)) {
     mkdirSync(piDir, { recursive: true });
   }
 
-  dbPath = join(piDir, "recorder.db");
+  const dbPath = join(piDir, "recorder.db");
+  db = new Database(dbPath);
 
-  // Load existing database or create new
-  if (existsSync(dbPath)) {
-    const data = readFileSync(dbPath);
-    db = new sqljs.Database(data);
-  } else {
-    db = new sqljs.Database();
-  }
+  // Enable WAL mode for better concurrent read performance
+  db.pragma("journal_mode = WAL");
+  db.pragma("foreign_keys = ON");
 
   // Ensure schema exists
   db.exec(SCHEMA);
-  markDirty();
-  persistDatabase(); // initial persist to ensure schema is saved
-  startPersistTimer();
 }
 
-// Helper: Persist database to disk (atomic write via tmp + rename)
-function persistDatabase(): void {
-  if (!db || !dbPath || !dirty) return;
+// Helper: Safe database operation (returns result or null on error)
+function safeRun(
+  sql: string,
+  params: unknown[] = [],
+): { changes: number; lastInsertRowid: number | bigint } | null {
+  if (!db) return null;
 
   try {
-    const data = db.export();
-    const tmpPath = dbPath + ".tmp";
-    writeFileSync(tmpPath, Buffer.from(data));
-    renameSync(tmpPath, dbPath);
-    dirty = false;
-  } catch (e) {
-    console.error("[recorder] Failed to persist database:", e);
-  }
-}
-
-// Helper: Safe database operation
-function safeRun(sql: string, params: SqlValue[] = []): void {
-  if (!db) return;
-
-  try {
-    db.run(sql, params);
+    return db.prepare(sql).run(...params);
   } catch (e) {
     console.error("[recorder] SQL error:", e);
+    return null;
   }
 }
 
 // Helper: Extract text content from content array (messages, tool results)
-function extractTextContent(content: Array<{ type: string; text?: string }>): string {
+function extractTextContent(
+  content: ReadonlyArray<{ type: string; [k: string]: unknown }>,
+): string {
   const texts: string[] = [];
 
   for (const item of content) {
-    if (item.type === "text" && item.text) {
+    if (item.type === "text" && typeof item.text === "string") {
       texts.push(item.text);
     }
   }
@@ -248,18 +219,12 @@ function extractTextContent(content: Array<{ type: string; text?: string }>): st
   return result;
 }
 
-// Helper: Get last insert rowid
-function getLastInsertId(): number | null {
-  if (!db) return null;
-  try {
-    const result = db.exec("SELECT last_insert_rowid()");
-    if (result.length > 0 && result[0].values.length > 0) {
-      return result[0].values[0][0] as number;
-    }
-  } catch {
-    // ignore
+// Helper: Truncate string to MAX_RESULT_SIZE
+function truncate(text: string): string {
+  if (text.length > MAX_RESULT_SIZE) {
+    return text.substring(0, MAX_RESULT_SIZE) + "... [truncated]";
   }
-  return null;
+  return text;
 }
 
 export default function (pi: ExtensionAPI) {
@@ -277,12 +242,14 @@ export default function (pi: ExtensionAPI) {
       const modelId = ctx.model?.id ?? null;
 
       safeRun(
-        `INSERT OR REPLACE INTO sessions (id, session_file, cwd, started_at, model_provider, model_id)
-         VALUES (?, ?, ?, ?, ?, ?)`,
-        [state.sessionId, sessionFile, ctx.cwd, Date.now(), modelProvider, modelId]
+        `INSERT INTO sessions (id, session_file, cwd, started_at, model_provider, model_id)
+         VALUES (?, ?, ?, ?, ?, ?)
+         ON CONFLICT(id) DO UPDATE SET
+           session_file = excluded.session_file,
+           model_provider = excluded.model_provider,
+           model_id = excluded.model_id`,
+        [state.sessionId, sessionFile, ctx.cwd, Date.now(), modelProvider, modelId],
       );
-
-      markDirty();
 
       if (ctx.hasUI) {
         ctx.ui.setStatus("recorder", ctx.ui.theme.fg("success", "recorder ✓"));
@@ -291,9 +258,8 @@ export default function (pi: ExtensionAPI) {
       const msg = e instanceof Error ? e.message : String(e);
       console.error("[recorder] session_start error:", msg);
       if (ctx.hasUI) {
-        // Show error status with tooltip hint
         ctx.ui.setStatus("recorder", ctx.ui.theme.fg("error", "recorder ✗"));
-        if (msg.includes("sql.js")) {
+        if (msg.includes("better-sqlite3")) {
           ctx.ui.notify("Recorder: " + msg, "error");
         }
       }
@@ -304,38 +270,24 @@ export default function (pi: ExtensionAPI) {
   pi.on("input", async (event: InputEvent) => {
     if (!db || !state.sessionId) return;
 
-    try {
-      let content = event.text;
-      if (content.length > MAX_RESULT_SIZE) {
-        content = content.substring(0, MAX_RESULT_SIZE) + "\n... [truncated at 50KB]";
-      }
+    const content = truncate(event.text);
 
-      safeRun(
-        `INSERT INTO messages (session_id, role, content, timestamp)
-         VALUES (?, ?, ?, ?)`,
-        [state.sessionId, "user", content, Date.now()]
-      );
-
-      markDirty();
-    } catch (e) {
-      console.error("[recorder] input error:", e);
-    }
+    safeRun(
+      `INSERT INTO messages (session_id, role, content, timestamp)
+       VALUES (?, ?, ?, ?)`,
+      [state.sessionId, "user", content, Date.now()],
+    );
   });
 
-  // Session shutdown: finalize totals and persist
+  // Session shutdown: finalize and close
   pi.on("session_shutdown", async () => {
     if (!db || !state.sessionId) return;
 
     try {
       safeRun(
         `UPDATE sessions SET ended_at = ? WHERE id = ?`,
-        [Date.now(), state.sessionId]
+        [Date.now(), state.sessionId],
       );
-      markDirty();
-
-      // Stop timer and do final flush
-      stopPersistTimer();
-      persistDatabase();
 
       // Clean up orphaned tool call start times
       state.toolCallStarts.clear();
@@ -353,21 +305,21 @@ export default function (pi: ExtensionAPI) {
     if (!db || !state.sessionId) return;
 
     try {
-      state.currentTurnStartedAt = event.timestamp;
+      state.currentTurnStartedAt = Date.now();
 
-      safeRun(
+      const result = safeRun(
         `INSERT INTO turns (session_id, turn_index, started_at)
          VALUES (?, ?, ?)`,
-        [state.sessionId, event.turnIndex, event.timestamp]
+        [state.sessionId, event.turnIndex, state.currentTurnStartedAt],
       );
 
-      state.currentTurnId = getLastInsertId();
+      state.currentTurnId = result ? Number(result.lastInsertRowid) : null;
     } catch (e) {
       console.error("[recorder] turn_start error:", e);
     }
   });
 
-  // Turn end: record turn recorder
+  // Turn end: record turn completion
   pi.on("turn_end", async (event: TurnEndEvent) => {
     if (!db || !state.sessionId || !state.currentTurnId) return;
 
@@ -375,19 +327,36 @@ export default function (pi: ExtensionAPI) {
       const endedAt = Date.now();
       const durationMs = endedAt - state.currentTurnStartedAt;
 
-      // Extract usage from assistant message
-      const msg = event.message as {
-        role?: string;
-        provider?: string;
-        model?: string;
-        content?: Array<{ type: string; text?: string }>;
-        usage?: { input?: number; output?: number; cost?: { total?: number } };
-        stopReason?: string;
-      };
+      const msg = event.message as Record<string, unknown>;
 
-      const inputTokens = msg.usage?.input ?? 0;
-      const outputTokens = msg.usage?.output ?? 0;
-      const cost = msg.usage?.cost?.total ?? 0;
+      // Only extract usage/content from assistant messages
+      let inputTokens = 0;
+      let outputTokens = 0;
+      let cost = 0;
+      let provider: string | null = null;
+      let model: string | null = null;
+      let stopReason: string | null = null;
+      let assistantText: string | null = null;
+
+      if (msg.role === "assistant") {
+        const usage = msg.usage as {
+          input: number;
+          output: number;
+          cost: { total: number };
+        } | undefined;
+
+        inputTokens = usage?.input ?? 0;
+        outputTokens = usage?.output ?? 0;
+        cost = usage?.cost?.total ?? 0;
+        provider = (msg.provider as string) ?? null;
+        model = (msg.model as string) ?? null;
+        stopReason = (msg.stopReason as string) ?? null;
+
+        const content = msg.content as ReadonlyArray<{ type: string; [k: string]: unknown }> | undefined;
+        if (content) {
+          assistantText = extractTextContent(content);
+        }
+      }
 
       safeRun(
         `UPDATE turns SET
@@ -398,11 +367,11 @@ export default function (pi: ExtensionAPI) {
          WHERE id = ?`,
         [
           endedAt, durationMs,
-          msg.provider ?? null, msg.model ?? null,
+          provider, model,
           inputTokens, outputTokens, cost,
-          msg.stopReason ?? null,
-          state.currentTurnId
-        ]
+          stopReason,
+          state.currentTurnId,
+        ],
       );
 
       // Update session totals
@@ -412,22 +381,16 @@ export default function (pi: ExtensionAPI) {
            total_output_tokens = total_output_tokens + ?,
            total_cost = total_cost + ?
          WHERE id = ?`,
-        [inputTokens, outputTokens, cost, state.sessionId]
+        [inputTokens, outputTokens, cost, state.sessionId],
       );
 
-      // Record assistant message
-      if (msg.content) {
-        const assistantText = extractTextContent(msg.content);
-        if (assistantText) {
-          safeRun(
-            `INSERT INTO messages (session_id, role, content, turn_id, timestamp)
-             VALUES (?, ?, ?, ?, ?)`,
-            [state.sessionId, "assistant", assistantText, state.currentTurnId, endedAt]
-          );
-        }
+      if (assistantText) {
+        safeRun(
+          `INSERT INTO messages (session_id, role, content, turn_id, timestamp)
+           VALUES (?, ?, ?, ?, ?)`,
+          [state.sessionId, "assistant", assistantText, state.currentTurnId, endedAt],
+        );
       }
-
-      markDirty();
     } catch (e) {
       console.error("[recorder] turn_end error:", e);
     }
@@ -441,6 +404,11 @@ export default function (pi: ExtensionAPI) {
       const startedAt = Date.now();
       state.toolCallStarts.set(event.toolCallId, startedAt);
 
+      let inputJson = JSON.stringify(event.input);
+      if (inputJson.length > MAX_RESULT_SIZE) {
+        inputJson = inputJson.substring(0, MAX_RESULT_SIZE) + "... [truncated]";
+      }
+
       safeRun(
         `INSERT INTO tool_calls (id, session_id, turn_id, tool_name, input_json, started_at)
          VALUES (?, ?, ?, ?, ?, ?)`,
@@ -449,9 +417,9 @@ export default function (pi: ExtensionAPI) {
           state.sessionId,
           state.currentTurnId,
           event.toolName,
-          JSON.stringify(event.input),
-          startedAt
-        ]
+          inputJson,
+          startedAt,
+        ],
       );
     } catch (e) {
       console.error("[recorder] tool_call error:", e);
@@ -469,40 +437,39 @@ export default function (pi: ExtensionAPI) {
 
       state.toolCallStarts.delete(event.toolCallId);
 
-      const resultText = extractTextContent(event.content as Array<{ type: string; text?: string }>);
+      const resultText = extractTextContent(
+        event.content as ReadonlyArray<{ type: string; [k: string]: unknown }>,
+      );
 
       safeRun(
         `UPDATE tool_calls SET
            ended_at = ?, duration_ms = ?, is_error = ?, result_text = ?
          WHERE id = ?`,
-        [endedAt, durationMs, event.isError ? 1 : 0, resultText, event.toolCallId]
+        [endedAt, durationMs, event.isError ? 1 : 0, resultText, event.toolCallId],
       );
-
-      markDirty();
     } catch (e) {
       console.error("[recorder] tool_result error:", e);
     }
   });
 
   // Model select: record model changes
-  pi.on("model_select", async (event: ModelSelectEvent, ctx: ExtensionContext) => {
+  pi.on("model_select", async (event: ModelSelectEvent) => {
     if (!db || !state.sessionId) return;
 
     try {
       safeRun(
-        `INSERT INTO model_changes (session_id, timestamp, from_provider, from_model_id, to_provider, to_model_id)
-         VALUES (?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO model_changes (session_id, timestamp, source, from_provider, from_model_id, to_provider, to_model_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
         [
           state.sessionId,
           Date.now(),
+          event.source,
           event.previousModel?.provider ?? null,
           event.previousModel?.id ?? null,
           event.model.provider,
-          event.model.id
-        ]
+          event.model.id,
+        ],
       );
-
-      markDirty();
     } catch (e) {
       console.error("[recorder] model_select error:", e);
     }
