@@ -7,6 +7,11 @@
  * Database location: ~/.pi/agent/recorder.db
  *
  * Query with: sqlite3 ~/.pi/agent/recorder.db "SELECT * FROM sessions"
+ *
+ * NOTE: This extension assumes single-session-per-process semantics. Module-level
+ * state (db handle, session ID, turn tracking) is shared. If pi-coding-agent ever
+ * supports concurrent sessions in a single process, this must be refactored to
+ * scope state per session.
  */
 
 import type {
@@ -36,10 +41,13 @@ interface InputEvent {
   source: "interactive" | "rpc" | "extension";
 }
 
-// better-sqlite3 types (loaded dynamically)
+// Minimal better-sqlite3 types for the subset of API we use.
+// Defined inline because the module is loaded dynamically via import() and
+// @types/better-sqlite3 cannot provide types for a dynamic default export.
 interface BetterSqlite3Database {
   exec(sql: string): this;
   prepare(sql: string): BetterSqlite3Statement;
+  transaction<F extends (...args: unknown[]) => unknown>(fn: F): F;
   pragma(pragma: string, options?: { simple?: boolean }): unknown;
   close(): void;
 }
@@ -143,17 +151,22 @@ let moduleError: string | null = null;
 let state = {
   sessionId: null as string | null,
   currentTurnId: null as number | null,
-  currentTurnStartedAt: 0,
+  currentTurnStartedAt: null as number | null,
   toolCallStarts: new Map<string, number>(),
 };
 
-// Helper: Load better-sqlite3 dynamically
+// Cached constructor
+let DatabaseCtor: BetterSqlite3Constructor | null = null;
+
+// Helper: Load better-sqlite3 dynamically (caches constructor on first successful import)
 async function loadBetterSqlite3(): Promise<BetterSqlite3Constructor> {
+  if (DatabaseCtor) return DatabaseCtor;
   if (!moduleAvailable) throw new Error(moduleError || "better-sqlite3 not available");
 
   try {
     const mod = await import("better-sqlite3");
-    return mod.default as BetterSqlite3Constructor;
+    DatabaseCtor = mod.default as BetterSqlite3Constructor;
+    return DatabaseCtor;
   } catch {
     moduleAvailable = false;
     moduleError = "better-sqlite3 not installed. Run: cd pi/extensions/recorder && npm install";
@@ -179,7 +192,7 @@ async function initDatabase(): Promise<void> {
   db.pragma("journal_mode = WAL");
   db.pragma("foreign_keys = ON");
 
-  // Ensure schema exists
+  // Ensure schema exists (idempotent via IF NOT EXISTS)
   db.exec(SCHEMA);
 }
 
@@ -222,12 +235,12 @@ function extractTextContent(
 // Helper: Truncate string to MAX_RESULT_SIZE
 function truncate(text: string): string {
   if (text.length > MAX_RESULT_SIZE) {
-    return text.substring(0, MAX_RESULT_SIZE) + "... [truncated]";
+    return text.substring(0, MAX_RESULT_SIZE) + "... [truncated at 50KB]";
   }
   return text;
 }
 
-export default function (pi: ExtensionAPI) {
+export default function recorderExtension(pi: ExtensionAPI) {
   // Session start: initialize database and record session
   pi.on("session_start", async (_event, ctx: ExtensionContext) => {
     try {
@@ -288,15 +301,19 @@ export default function (pi: ExtensionAPI) {
         `UPDATE sessions SET ended_at = ? WHERE id = ?`,
         [Date.now(), state.sessionId],
       );
-
-      // Clean up orphaned tool call start times
-      state.toolCallStarts.clear();
-
-      db.close();
-      db = null;
-      state.sessionId = null;
     } catch (e) {
       console.error("[recorder] session_shutdown error:", e);
+    } finally {
+      state.toolCallStarts.clear();
+      state.sessionId = null;
+      if (db) {
+        try {
+          db.close();
+        } catch (e) {
+          console.error("[recorder] db.close() error:", e);
+        }
+        db = null;
+      }
     }
   });
 
@@ -325,7 +342,9 @@ export default function (pi: ExtensionAPI) {
 
     try {
       const endedAt = Date.now();
-      const durationMs = endedAt - state.currentTurnStartedAt;
+      const durationMs = state.currentTurnStartedAt !== null
+        ? endedAt - state.currentTurnStartedAt
+        : null;
 
       const msg = event.message as Record<string, unknown>;
 
@@ -358,39 +377,39 @@ export default function (pi: ExtensionAPI) {
         }
       }
 
-      safeRun(
-        `UPDATE turns SET
-           ended_at = ?, duration_ms = ?,
-           model_provider = ?, model_id = ?,
-           input_tokens = ?, output_tokens = ?, cost = ?,
-           stop_reason = ?
-         WHERE id = ?`,
-        [
+      // Atomic: update turn, accumulate session totals, and insert message
+      const commitTurn = db.transaction(() => {
+        db!.prepare(
+          `UPDATE turns SET
+             ended_at = ?, duration_ms = ?,
+             model_provider = ?, model_id = ?,
+             input_tokens = ?, output_tokens = ?, cost = ?,
+             stop_reason = ?
+           WHERE id = ?`,
+        ).run(
           endedAt, durationMs,
           provider, model,
           inputTokens, outputTokens, cost,
           stopReason,
           state.currentTurnId,
-        ],
-      );
-
-      // Update session totals
-      safeRun(
-        `UPDATE sessions SET
-           total_input_tokens = total_input_tokens + ?,
-           total_output_tokens = total_output_tokens + ?,
-           total_cost = total_cost + ?
-         WHERE id = ?`,
-        [inputTokens, outputTokens, cost, state.sessionId],
-      );
-
-      if (assistantText) {
-        safeRun(
-          `INSERT INTO messages (session_id, role, content, turn_id, timestamp)
-           VALUES (?, ?, ?, ?, ?)`,
-          [state.sessionId, "assistant", assistantText, state.currentTurnId, endedAt],
         );
-      }
+
+        db!.prepare(
+          `UPDATE sessions SET
+             total_input_tokens = total_input_tokens + ?,
+             total_output_tokens = total_output_tokens + ?,
+             total_cost = total_cost + ?
+           WHERE id = ?`,
+        ).run(inputTokens, outputTokens, cost, state.sessionId);
+
+        if (assistantText) {
+          db!.prepare(
+            `INSERT INTO messages (session_id, role, content, turn_id, timestamp)
+             VALUES (?, ?, ?, ?, ?)`,
+          ).run(state.sessionId, "assistant", assistantText, state.currentTurnId, endedAt);
+        }
+      });
+      commitTurn();
     } catch (e) {
       console.error("[recorder] turn_end error:", e);
     }
@@ -406,7 +425,7 @@ export default function (pi: ExtensionAPI) {
 
       let inputJson = JSON.stringify(event.input);
       if (inputJson.length > MAX_RESULT_SIZE) {
-        inputJson = inputJson.substring(0, MAX_RESULT_SIZE) + "... [truncated]";
+        inputJson = inputJson.substring(0, MAX_RESULT_SIZE) + "... [truncated at 50KB]";
       }
 
       safeRun(
