@@ -61,8 +61,17 @@ type BetterSqlite3Constructor = new (
   options?: Record<string, unknown>,
 ) => BetterSqlite3Database;
 
+// Extension identity
+const EXT_NAME = "recorder";
+const LOG_PREFIX = `[${EXT_NAME}]`;
+
+// Database location
+const DB_DIR = ".pi/agent"; // relative to homedir()
+const DB_FILENAME = "recorder.db";
+
 // Max result size to store (50KB)
 const MAX_RESULT_SIZE = 50 * 1024;
+const TRUNCATION_SUFFIX = "... [truncated at 50KB]";
 
 // Schema (PRAGMA set separately via db.pragma())
 const SCHEMA = `
@@ -169,7 +178,7 @@ async function loadBetterSqlite3(): Promise<BetterSqlite3Constructor> {
     return DatabaseCtor;
   } catch {
     moduleAvailable = false;
-    moduleError = "better-sqlite3 not installed. Run: cd pi/extensions/recorder && npm install";
+    moduleError = `better-sqlite3 not installed. Run: cd pi/extensions/${EXT_NAME} && npm install`;
     throw new Error(moduleError);
   }
 }
@@ -180,12 +189,12 @@ async function initDatabase(): Promise<void> {
 
   const Database = await loadBetterSqlite3();
 
-  const piDir = join(homedir(), ".pi", "agent");
+  const piDir = join(homedir(), DB_DIR);
   if (!existsSync(piDir)) {
     mkdirSync(piDir, { recursive: true });
   }
 
-  const dbPath = join(piDir, "recorder.db");
+  const dbPath = join(piDir, DB_FILENAME);
   db = new Database(dbPath);
 
   // Enable WAL mode for better concurrent read performance
@@ -206,7 +215,7 @@ function safeRun(
   try {
     return db.prepare(sql).run(...params);
   } catch (e) {
-    console.error("[recorder] SQL error:", e);
+    console.error(LOG_PREFIX, "SQL error:", e);
     return null;
   }
 }
@@ -226,7 +235,7 @@ function extractTextContent(
   let result = texts.join("\n");
 
   if (result.length > MAX_RESULT_SIZE) {
-    result = result.substring(0, MAX_RESULT_SIZE) + "\n... [truncated at 50KB]";
+    result = result.substring(0, MAX_RESULT_SIZE) + "\n" + TRUNCATION_SUFFIX;
   }
 
   return result;
@@ -235,7 +244,7 @@ function extractTextContent(
 // Helper: Truncate string to MAX_RESULT_SIZE
 function truncate(text: string): string {
   if (text.length > MAX_RESULT_SIZE) {
-    return text.substring(0, MAX_RESULT_SIZE) + "... [truncated at 50KB]";
+    return text.substring(0, MAX_RESULT_SIZE) + TRUNCATION_SUFFIX;
   }
   return text;
 }
@@ -265,15 +274,15 @@ export default function recorderExtension(pi: ExtensionAPI) {
       );
 
       if (ctx.hasUI) {
-        ctx.ui.setStatus("recorder", ctx.ui.theme.fg("success", "recorder ✓"));
+        ctx.ui.setStatus(EXT_NAME, ctx.ui.theme.fg("success", `${EXT_NAME} ✓`));
       }
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
-      console.error("[recorder] session_start error:", msg);
+      console.error(LOG_PREFIX, "session_start error:", msg);
       if (ctx.hasUI) {
-        ctx.ui.setStatus("recorder", ctx.ui.theme.fg("error", "recorder ✗"));
+        ctx.ui.setStatus(EXT_NAME, ctx.ui.theme.fg("error", `${EXT_NAME} ✗`));
         if (msg.includes("better-sqlite3")) {
-          ctx.ui.notify("Recorder: " + msg, "error");
+          ctx.ui.notify(`${EXT_NAME}: ${msg}`, "error");
         }
       }
     }
@@ -302,7 +311,7 @@ export default function recorderExtension(pi: ExtensionAPI) {
         [Date.now(), state.sessionId],
       );
     } catch (e) {
-      console.error("[recorder] session_shutdown error:", e);
+      console.error(LOG_PREFIX, "session_shutdown error:", e);
     } finally {
       state.toolCallStarts.clear();
       state.sessionId = null;
@@ -310,7 +319,7 @@ export default function recorderExtension(pi: ExtensionAPI) {
         try {
           db.close();
         } catch (e) {
-          console.error("[recorder] db.close() error:", e);
+          console.error(LOG_PREFIX, "db.close() error:", e);
         }
         db = null;
       }
@@ -332,7 +341,7 @@ export default function recorderExtension(pi: ExtensionAPI) {
 
       state.currentTurnId = result ? Number(result.lastInsertRowid) : null;
     } catch (e) {
-      console.error("[recorder] turn_start error:", e);
+      console.error(LOG_PREFIX, "turn_start error:", e);
     }
   });
 
@@ -411,7 +420,7 @@ export default function recorderExtension(pi: ExtensionAPI) {
       });
       commitTurn();
     } catch (e) {
-      console.error("[recorder] turn_end error:", e);
+      console.error(LOG_PREFIX, "turn_end error:", e);
     }
   });
 
@@ -425,7 +434,7 @@ export default function recorderExtension(pi: ExtensionAPI) {
 
       let inputJson = JSON.stringify(event.input);
       if (inputJson.length > MAX_RESULT_SIZE) {
-        inputJson = inputJson.substring(0, MAX_RESULT_SIZE) + "... [truncated at 50KB]";
+        inputJson = inputJson.substring(0, MAX_RESULT_SIZE) + TRUNCATION_SUFFIX;
       }
 
       safeRun(
@@ -441,7 +450,7 @@ export default function recorderExtension(pi: ExtensionAPI) {
         ],
       );
     } catch (e) {
-      console.error("[recorder] tool_call error:", e);
+      console.error(LOG_PREFIX, "tool_call error:", e);
     }
   });
 
@@ -467,7 +476,7 @@ export default function recorderExtension(pi: ExtensionAPI) {
         [endedAt, durationMs, event.isError ? 1 : 0, resultText, event.toolCallId],
       );
     } catch (e) {
-      console.error("[recorder] tool_result error:", e);
+      console.error(LOG_PREFIX, "tool_result error:", e);
     }
   });
 
@@ -490,7 +499,7 @@ export default function recorderExtension(pi: ExtensionAPI) {
         ],
       );
     } catch (e) {
-      console.error("[recorder] model_select error:", e);
+      console.error(LOG_PREFIX, "model_select error:", e);
     }
   });
 }
