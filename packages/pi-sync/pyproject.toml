@@ -1,0 +1,11 @@
+[project]
+name = "pi-sync"
+version = "0.2.0"
+requires-python = ">=3.13"
+
+[project.scripts]
+pi-sync = "pi_sync.cli:main"
+
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"

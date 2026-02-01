@@ -1,35 +1,23 @@
 {
   lib,
-  stdenvNoCC,
-  makeWrapper,
-  coreutils,
-  findutils,
-  gnused,
+  python3,
+  nodejs,
 }:
-stdenvNoCC.mkDerivation {
+python3.pkgs.buildPythonApplication {
   pname = "pi-sync";
-  version = "0.1.0";
+  version = "0.2.0";
+  pyproject = true;
 
   src = ./.;
 
-  nativeBuildInputs = [ makeWrapper ];
+  build-system = with python3.pkgs; [
+    setuptools
+    wheel
+  ];
 
-  installPhase = ''
-    runHook preInstall
+  makeWrapperArgs = [ "--prefix PATH : ${lib.makeBinPath [ nodejs ]}" ];
 
-    install -Dm755 pi-sync $out/bin/pi-sync
-
-    wrapProgram $out/bin/pi-sync \
-      --prefix PATH : ${
-        lib.makeBinPath [
-          coreutils
-          findutils
-          gnused
-        ]
-      }
-
-    runHook postInstall
-  '';
+  pythonImportsCheck = [ "pi_sync" ];
 
   meta = {
     description = "Sync skillz extensions and skills to ~/.pi/agent/";
