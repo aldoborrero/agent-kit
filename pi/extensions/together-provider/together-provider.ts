@@ -164,6 +164,15 @@ export default function (pi: ExtensionAPI) {
         contextWindow: 262144,
         maxTokens: 32768,
       },
+      {
+        id: "moonshotai/Kimi-K2.5",
+        name: "Kimi K2.5",
+        reasoning: true,
+        input: ["text", "image"],
+        cost: { input: 0.5, output: 2.8, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 262144,
+        maxTokens: 32768,
+      },
       // GLM
       {
         id: "zai-org/GLM-4.7",
