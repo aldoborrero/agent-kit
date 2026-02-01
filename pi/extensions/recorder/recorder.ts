@@ -24,7 +24,7 @@ import type {
 } from "@mariozechner/pi-coding-agent";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { existsSync, mkdirSync } from "node:fs";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 
 // Events not exported from pi-coding-agent, define inline
 interface ModelSelectEvent {
@@ -54,6 +54,7 @@ interface BetterSqlite3Database {
 
 interface BetterSqlite3Statement {
   run(...params: unknown[]): { changes: number; lastInsertRowid: number | bigint };
+  get(...params: unknown[]): unknown;
 }
 
 type BetterSqlite3Constructor = new (
@@ -68,6 +69,7 @@ const LOG_PREFIX = `[${EXT_NAME}]`;
 // Database location
 const DB_DIR = ".pi/agent"; // relative to homedir()
 const DB_FILENAME = "recorder.db";
+const METADATA_FILENAME = "recorder-metadata.yml";
 
 // Max result size to store (50KB)
 const MAX_RESULT_SIZE = 50 * 1024;
@@ -92,6 +94,7 @@ CREATE TABLE IF NOT EXISTS turns (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     session_id TEXT NOT NULL,
     turn_index INTEGER NOT NULL,
+    iteration_number INTEGER DEFAULT 0,
     started_at INTEGER NOT NULL,
     ended_at INTEGER,
     duration_ms INTEGER,
@@ -101,7 +104,7 @@ CREATE TABLE IF NOT EXISTS turns (
     output_tokens INTEGER DEFAULT 0,
     cost REAL DEFAULT 0,
     stop_reason TEXT,
-    UNIQUE(session_id, turn_index),
+    UNIQUE(session_id, turn_index, iteration_number),
     FOREIGN KEY (session_id) REFERENCES sessions(id)
 );
 
@@ -150,6 +153,324 @@ CREATE INDEX IF NOT EXISTS idx_tool_calls_turn ON tool_calls(turn_id);
 CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id);
 CREATE INDEX IF NOT EXISTS idx_sessions_started ON sessions(started_at);
 CREATE INDEX IF NOT EXISTS idx_turns_started ON turns(started_at);
+
+-- Views for analytics (also used by datasette)
+CREATE VIEW IF NOT EXISTS v_session_summary AS
+SELECT
+    s.id,
+    datetime(s.started_at / 1000, 'unixepoch', 'localtime') AS started,
+    datetime(s.ended_at / 1000, 'unixepoch', 'localtime') AS ended,
+    CASE WHEN s.ended_at IS NOT NULL
+        THEN round((s.ended_at - s.started_at) / 1000.0 / 60, 1)
+        ELSE NULL
+    END AS duration_min,
+    s.model_provider,
+    s.model_id,
+    s.total_input_tokens,
+    s.total_output_tokens,
+    round(s.total_cost, 4) AS total_cost,
+    (SELECT count(*) FROM turns t WHERE t.session_id = s.id) AS turn_count,
+    (SELECT count(*) FROM tool_calls tc WHERE tc.session_id = s.id) AS tool_call_count,
+    s.cwd
+FROM sessions s
+ORDER BY s.started_at DESC;
+
+CREATE VIEW IF NOT EXISTS v_tool_stats AS
+SELECT
+    tool_name,
+    count(*) AS total_calls,
+    sum(is_error) AS error_count,
+    round(100.0 * sum(is_error) / count(*), 1) AS error_pct,
+    round(avg(duration_ms)) AS avg_duration_ms,
+    min(duration_ms) AS min_duration_ms,
+    max(duration_ms) AS max_duration_ms
+FROM tool_calls
+WHERE duration_ms IS NOT NULL
+GROUP BY tool_name
+ORDER BY total_calls DESC;
+
+CREATE VIEW IF NOT EXISTS v_daily_cost AS
+SELECT
+    date(started_at / 1000, 'unixepoch', 'localtime') AS day,
+    count(*) AS session_count,
+    sum(total_input_tokens) AS input_tokens,
+    sum(total_output_tokens) AS output_tokens,
+    round(sum(total_cost), 4) AS total_cost
+FROM sessions
+GROUP BY day
+ORDER BY day DESC;
+`;
+
+// Datasette metadata (written to ~/.pi/agent/ alongside the database)
+const DATASETTE_METADATA = `title: Pi Recorder
+description: Session activity recorded by the pi-coding-agent recorder extension.
+
+databases:
+  recorder:
+    description: >
+      All pi-coding-agent session activity: sessions, turns, tool calls,
+      messages, and model changes. Timestamps are Unix milliseconds.
+
+    tables:
+      sessions:
+        description: One row per pi session. Aggregates token counts and cost.
+        facets:
+          - model_provider
+          - model_id
+        sort_desc: started_at
+        columns:
+          id: Session UUID
+          session_file: Path to the .jsonl session file
+          cwd: Working directory when the session started
+          started_at: Session start time (Unix ms)
+          ended_at: Session end time (Unix ms)
+          model_provider: Initial model provider (e.g. anthropic)
+          model_id: Initial model ID (e.g. claude-sonnet-4-20250514)
+          total_input_tokens: Sum of input tokens across all turns
+          total_output_tokens: Sum of output tokens across all turns
+          total_cost: Sum of cost across all turns (USD)
+
+      turns:
+        description: One row per LLM response iteration within a conversational turn. A single turn may have multiple iterations when tools are used.
+        facets:
+          - model_provider
+          - model_id
+          - stop_reason
+        sort_desc: started_at
+        columns:
+          id: Auto-incremented turn ID
+          session_id: FK to sessions.id
+          turn_index: Zero-based conversational turn number within the session
+          iteration_number: Zero-based iteration within this turn (increments when tools require follow-up calls)
+          started_at: Turn start time (Unix ms)
+          ended_at: Turn end time (Unix ms)
+          duration_ms: Turn duration in milliseconds
+          model_provider: Model provider for this turn
+          model_id: Model ID for this turn
+          input_tokens: Input tokens consumed
+          output_tokens: Output tokens produced
+          cost: Cost of this turn (USD)
+          stop_reason: Why the turn ended (e.g. end_turn, tool_use)
+
+      tool_calls:
+        description: One row per tool invocation. Tracks timing and errors.
+        facets:
+          - tool_name
+          - is_error
+        sort_desc: started_at
+        columns:
+          id: Tool call UUID
+          session_id: FK to sessions.id
+          turn_id: FK to turns.id
+          tool_name: Name of the tool invoked
+          input_json: JSON-serialized tool input (truncated at 50KB)
+          started_at: Tool call start time (Unix ms)
+          ended_at: Tool call end time (Unix ms)
+          duration_ms: Tool call duration in milliseconds
+          is_error: 1 if the tool returned an error, 0 otherwise
+          result_text: Tool result text (truncated at 50KB)
+
+      messages:
+        description: User and assistant messages recorded during sessions.
+        facets:
+          - role
+        sort_desc: timestamp
+        columns:
+          id: Auto-incremented message ID
+          session_id: FK to sessions.id
+          role: "'user' or 'assistant'"
+          content: Message text (truncated at 50KB)
+          turn_id: FK to turns.id (null for user messages)
+          timestamp: Message timestamp (Unix ms)
+
+      model_changes:
+        description: Records when the model was changed during a session.
+        facets:
+          - source
+          - to_provider
+          - to_model_id
+        sort_desc: timestamp
+        columns:
+          id: Auto-incremented change ID
+          session_id: FK to sessions.id
+          timestamp: Change timestamp (Unix ms)
+          source: How the model was changed (set, cycle, restore)
+          from_provider: Previous model provider
+          from_model_id: Previous model ID
+          to_provider: New model provider
+          to_model_id: New model ID
+
+      v_session_summary:
+        description: >
+          Enriched session view with human-readable timestamps, duration in
+          minutes, and turn/tool call counts.
+
+      v_tool_stats:
+        description: >
+          Aggregated tool statistics: call count, error count/rate, and
+          duration min/avg/max per tool name.
+
+      v_daily_cost:
+        description: >
+          Daily cost and token aggregation across all sessions.
+
+    queries:
+      recent-sessions:
+        title: Recent Sessions
+        description: Last 50 sessions with duration, cost, and token counts.
+        sql: |
+          SELECT
+              id,
+              datetime(started_at / 1000, 'unixepoch', 'localtime') AS started,
+              CASE WHEN ended_at IS NOT NULL
+                  THEN round((ended_at - started_at) / 1000.0 / 60, 1)
+                  ELSE NULL
+              END AS duration_min,
+              model_id,
+              total_input_tokens,
+              total_output_tokens,
+              round(total_cost, 4) AS cost,
+              cwd
+          FROM sessions
+          ORDER BY started_at DESC
+          LIMIT 50
+
+      daily-cost:
+        title: Daily Cost
+        description: Cost and token usage aggregated by day.
+        sql: |
+          SELECT
+              date(started_at / 1000, 'unixepoch', 'localtime') AS day,
+              count(*) AS sessions,
+              sum(total_input_tokens) AS input_tokens,
+              sum(total_output_tokens) AS output_tokens,
+              round(sum(total_cost), 4) AS total_cost
+          FROM sessions
+          GROUP BY day
+          ORDER BY day DESC
+
+      tool-usage:
+        title: Tool Usage Stats
+        description: Call count, error rate, and average duration per tool.
+        sql: |
+          SELECT
+              tool_name,
+              count(*) AS calls,
+              sum(is_error) AS errors,
+              round(100.0 * sum(is_error) / count(*), 1) AS error_pct,
+              round(avg(duration_ms)) AS avg_ms,
+              max(duration_ms) AS max_ms
+          FROM tool_calls
+          GROUP BY tool_name
+          ORDER BY calls DESC
+
+      slowest-tools:
+        title: Slowest Tool Calls
+        description: Top 50 tool calls by duration.
+        sql: |
+          SELECT
+              tc.tool_name,
+              tc.duration_ms,
+              datetime(tc.started_at / 1000, 'unixepoch', 'localtime') AS started,
+              tc.is_error,
+              s.cwd,
+              substr(tc.input_json, 1, 200) AS input_preview
+          FROM tool_calls tc
+          JOIN sessions s ON tc.session_id = s.id
+          WHERE tc.duration_ms IS NOT NULL
+          ORDER BY tc.duration_ms DESC
+          LIMIT 50
+
+      model-comparison:
+        title: Model Comparison
+        description: Token usage and cost breakdown per model.
+        sql: |
+          SELECT
+              model_provider,
+              model_id,
+              count(*) AS turns,
+              sum(input_tokens) AS input_tokens,
+              sum(output_tokens) AS output_tokens,
+              round(sum(cost), 4) AS total_cost,
+              round(avg(duration_ms)) AS avg_turn_ms
+          FROM turns
+          WHERE model_id IS NOT NULL
+          GROUP BY model_provider, model_id
+          ORDER BY total_cost DESC
+
+      failed-tools:
+        title: Failed Tool Calls
+        description: All tool calls that returned an error.
+        sql: |
+          SELECT
+              tc.tool_name,
+              datetime(tc.started_at / 1000, 'unixepoch', 'localtime') AS timestamp,
+              tc.duration_ms,
+              substr(tc.result_text, 1, 500) AS error_text,
+              s.cwd
+          FROM tool_calls tc
+          JOIN sessions s ON tc.session_id = s.id
+          WHERE tc.is_error = 1
+          ORDER BY tc.started_at DESC
+          LIMIT 100
+
+      session-turns:
+        title: Session Turns
+        description: All turns for a specific session. Enter a session ID.
+        sql: |
+          SELECT
+              t.turn_index,
+              datetime(t.started_at / 1000, 'unixepoch', 'localtime') AS started,
+              t.duration_ms,
+              t.model_id,
+              t.input_tokens,
+              t.output_tokens,
+              round(t.cost, 6) AS cost,
+              t.stop_reason
+          FROM turns t
+          WHERE t.session_id = :session_id
+          ORDER BY t.turn_index
+
+      session-tools:
+        title: Session Tool Calls
+        description: All tool calls for a specific session. Enter a session ID.
+        sql: |
+          SELECT
+              tc.tool_name,
+              datetime(tc.started_at / 1000, 'unixepoch', 'localtime') AS started,
+              tc.duration_ms,
+              tc.is_error,
+              substr(tc.input_json, 1, 200) AS input_preview
+          FROM tool_calls tc
+          WHERE tc.session_id = :session_id
+          ORDER BY tc.started_at
+
+      hourly-activity:
+        title: Hourly Activity
+        description: Session count and cost by hour of day.
+        sql: |
+          SELECT
+              strftime('%H', datetime(started_at / 1000, 'unixepoch', 'localtime')) AS hour,
+              count(*) AS sessions,
+              round(sum(total_cost), 4) AS cost
+          FROM sessions
+          GROUP BY hour
+          ORDER BY hour
+
+      token-efficiency:
+        title: Token Efficiency
+        description: Cost per million tokens by model.
+        sql: |
+          SELECT
+              model_id,
+              round(sum(cost) / nullif(sum(output_tokens), 0) * 1000000, 2) AS cost_per_m_output,
+              round(sum(cost) / nullif(sum(input_tokens), 0) * 1000000, 2) AS cost_per_m_input,
+              sum(output_tokens) AS total_output,
+              round(sum(cost), 4) AS total_cost
+          FROM turns
+          WHERE model_id IS NOT NULL AND cost > 0
+          GROUP BY model_id
+          ORDER BY total_cost DESC
 `;
 
 // State
@@ -161,6 +482,8 @@ let state = {
   sessionId: null as string | null,
   currentTurnId: null as number | null,
   currentTurnStartedAt: null as number | null,
+  currentTurnIndex: null as number | null,
+  currentIteration: 0,
   toolCallStarts: new Map<string, number>(),
 };
 
@@ -203,6 +526,13 @@ async function initDatabase(): Promise<void> {
 
   // Ensure schema exists (idempotent via IF NOT EXISTS)
   db.exec(SCHEMA);
+
+  // Write datasette metadata alongside the database
+  try {
+    writeFileSync(join(piDir, METADATA_FILENAME), DATASETTE_METADATA);
+  } catch (e) {
+    console.error(LOG_PREFIX, "failed to write datasette metadata:", e);
+  }
 }
 
 // Helper: Safe database operation (returns result or null on error)
@@ -257,6 +587,8 @@ export default function recorderExtension(pi: ExtensionAPI) {
 
       state.sessionId = ctx.sessionManager.getSessionId();
       state.currentTurnId = null;
+      state.currentTurnIndex = null;
+      state.currentIteration = 0;
       state.toolCallStarts.clear();
 
       const sessionFile = ctx.sessionManager.getSessionFile();
@@ -333,13 +665,34 @@ export default function recorderExtension(pi: ExtensionAPI) {
     try {
       state.currentTurnStartedAt = Date.now();
 
-      const result = safeRun(
-        `INSERT INTO turns (session_id, turn_index, started_at)
-         VALUES (?, ?, ?)`,
-        [state.sessionId, event.turnIndex, state.currentTurnStartedAt],
-      );
+      // Track iteration number within this conversational turn
+      // When turn_index changes, reset iteration counter
+      if (state.currentTurnIndex !== event.turnIndex) {
+        state.currentTurnIndex = event.turnIndex;
+        state.currentIteration = 0;
+      } else {
+        state.currentIteration++;
+      }
 
-      state.currentTurnId = result ? Number(result.lastInsertRowid) : null;
+      // Use INSERT with RETURNING to get the turn ID in a single query
+      // Each iteration gets its own row with unique (session_id, turn_index, iteration_number)
+      const turnRow = db.prepare(
+        `INSERT INTO turns (session_id, turn_index, iteration_number, started_at)
+         VALUES (?, ?, ?, ?)
+         ON CONFLICT(session_id, turn_index, iteration_number) DO UPDATE SET
+           started_at = excluded.started_at,
+           ended_at = NULL,
+           duration_ms = NULL,
+           model_provider = NULL,
+           model_id = NULL,
+           input_tokens = 0,
+           output_tokens = 0,
+           cost = 0,
+           stop_reason = NULL
+         RETURNING id`
+      ).get(state.sessionId, event.turnIndex, state.currentIteration, state.currentTurnStartedAt) as { id: number } | undefined;
+
+      state.currentTurnId = turnRow ? turnRow.id : null;
     } catch (e) {
       console.error(LOG_PREFIX, "turn_start error:", e);
     }
