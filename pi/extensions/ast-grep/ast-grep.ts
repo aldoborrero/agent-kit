@@ -1,20 +1,28 @@
 /**
  * ast-grep Extension
  *
- * Structural code search using AST patterns. More powerful than text search
- * because it understands code structure.
- *
- * Examples:
- *   - Find all function calls: `$FUNC($$$ARGS)`
- *   - Find console.log: `console.log($$$)`
- *   - Find React useState: `const [$STATE, $SETTER] = useState($INIT)`
+ * Structural code search using AST patterns. Three modes:
+ *   - pattern: Simple pattern search (ast-grep run --pattern)
+ *   - rule: Complex YAML rule search (ast-grep scan --rule)
+ *   - inspect: AST structure dump (ast-grep run --debug-query)
  *
  * Requires: ast-grep installed (https://ast-grep.github.io)
  */
 
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import {
+  type ExtensionAPI,
+  getMarkdownTheme,
+} from "@mariozechner/pi-coding-agent";
+import { Container, Markdown, Text } from "@mariozechner/pi-tui";
 import { Type } from "@sinclair/typebox";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
 import { spawn } from "node:child_process";
+
+// ---------------------------------------------------------------------------
+// Types
+// ---------------------------------------------------------------------------
 
 interface AstGrepMatch {
   file: string;
@@ -25,11 +33,93 @@ interface AstGrepMatch {
   };
   lines: string;
   text: string;
-  replacement?: string;
   language: string;
-  metaVariables?: Record<string, { text: string }>;
+  metaVariables?: {
+    single?: Record<string, { text: string }>;
+    multi?: Record<string, Array<{ text: string }>>;
+    transformed?: Record<string, { text: string }>;
+  };
+  // scan-only fields
+  ruleId?: string;
+  severity?: string;
+  message?: string;
+  labels?: Array<{ text: string; style: string }>;
 }
 
+interface AstGrepParams {
+  mode: "pattern" | "rule" | "inspect";
+  pattern?: string;
+  rule?: string;
+  inspect_format?: "ast" | "cst" | "pattern";
+  lang?: string;
+  paths?: string[];
+  globs?: string[];
+  context?: boolean;
+  limit?: number;
+}
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+/** Indent every line of text by N spaces. */
+function indent(text: string, spaces: number): string {
+  const pad = " ".repeat(spaces);
+  return text
+    .split("\n")
+    .map((line) => pad + line)
+    .join("\n");
+}
+
+/** Append shared args (--lang, --globs, --context, paths) to an args array. */
+function addSharedArgs(args: string[], params: AstGrepParams): void {
+  if (params.lang) {
+    args.push("--lang", params.lang);
+  }
+  if (params.globs) {
+    for (const glob of params.globs) {
+      args.push("--globs", glob);
+    }
+  }
+  if (params.context) {
+    args.push("--context", "2");
+  }
+  if (params.paths && params.paths.length > 0) {
+    args.push(...params.paths);
+  } else {
+    args.push(".");
+  }
+}
+
+/** Write a YAML rule file to a temp directory. Returns { dir, filePath }. */
+function writeRuleToTempFile(
+  lang: string,
+  ruleBody: string,
+): { dir: string; filePath: string } {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ast-grep-rule-"));
+  const filePath = path.join(dir, "rule.yml");
+  const content = `id: ast-grep-search\nlanguage: ${lang}\nrule:\n${
+    indent(ruleBody, 2)
+  }\n`;
+  fs.writeFileSync(filePath, content, "utf-8");
+  return { dir, filePath };
+}
+
+/** Clean up temp rule file and directory. */
+function cleanupTempFile(dir: string, filePath: string): void {
+  try {
+    fs.unlinkSync(filePath);
+  } catch {
+    /* ignore */
+  }
+  try {
+    fs.rmdirSync(dir);
+  } catch {
+    /* ignore */
+  }
+}
+
+/** Run ast-grep and parse JSON output into matches. */
 function runAstGrep(args: string[], cwd: string): Promise<AstGrepMatch[]> {
   return new Promise((resolve, reject) => {
     const child = spawn("ast-grep", args, {
@@ -40,11 +130,11 @@ function runAstGrep(args: string[], cwd: string): Promise<AstGrepMatch[]> {
     let stdout = "";
     let stderr = "";
 
-    child.stdout.on("data", (chunk) => {
+    child.stdout.on("data", (chunk: Buffer) => {
       stdout += chunk.toString();
     });
 
-    child.stderr.on("data", (chunk) => {
+    child.stderr.on("data", (chunk: Buffer) => {
       stderr += chunk.toString();
     });
 
@@ -70,7 +160,11 @@ function runAstGrep(args: string[], cwd: string): Promise<AstGrepMatch[]> {
 
     child.on("error", (err) => {
       if ((err as NodeJS.ErrnoException).code === "ENOENT") {
-        reject(new Error("ast-grep not found. Install from https://ast-grep.github.io"));
+        reject(
+          new Error(
+            "ast-grep not found. Install from https://ast-grep.github.io",
+          ),
+        );
       } else {
         reject(err);
       }
@@ -78,7 +172,57 @@ function runAstGrep(args: string[], cwd: string): Promise<AstGrepMatch[]> {
   });
 }
 
-function formatResults(matches: AstGrepMatch[], showContext: boolean): string {
+/** Run ast-grep and return raw string output (no JSON parsing). For inspect mode. */
+function runAstGrepRaw(args: string[], cwd: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const child = spawn("ast-grep", args, {
+      cwd,
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+
+    let stdout = "";
+    let stderr = "";
+
+    child.stdout.on("data", (chunk: Buffer) => {
+      stdout += chunk.toString();
+    });
+
+    child.stderr.on("data", (chunk: Buffer) => {
+      stderr += chunk.toString();
+    });
+
+    child.on("close", (code) => {
+      if (code !== 0 && code !== 1) {
+        reject(new Error(stderr || `ast-grep exited with code ${code}`));
+        return;
+      }
+      // Debug output may appear on stdout or stderr; combine both
+      const combined = (stdout + "\n" + stderr).trim();
+      resolve(combined || "No output.");
+    });
+
+    child.on("error", (err) => {
+      if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+        reject(
+          new Error(
+            "ast-grep not found. Install from https://ast-grep.github.io",
+          ),
+        );
+      } else {
+        reject(err);
+      }
+    });
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Formatting
+// ---------------------------------------------------------------------------
+
+function formatResults(
+  matches: AstGrepMatch[],
+  showContext: boolean,
+): string {
   if (matches.length === 0) {
     return "No matches found.";
   }
@@ -91,14 +235,27 @@ function formatResults(matches: AstGrepMatch[], showContext: boolean): string {
     byFile.set(match.file, existing);
   }
 
-  let output = `Found ${matches.length} match(es) in ${byFile.size} file(s):\n\n`;
+  let output =
+    `Found ${matches.length} match(es) in ${byFile.size} file(s):\n\n`;
 
   for (const [file, fileMatches] of byFile) {
     output += `### ${file}\n\n`;
 
     for (const match of fileMatches) {
       const loc = `${match.range.start.line}:${match.range.start.column}`;
-      output += `**Line ${loc}**\n`;
+
+      // Include rule info for scan matches
+      if (match.ruleId && match.ruleId !== "ast-grep-search") {
+        output += `**Line ${loc}** (rule: ${match.ruleId}`;
+        if (match.severity) output += `, ${match.severity}`;
+        output += ")\n";
+      } else {
+        output += `**Line ${loc}**\n`;
+      }
+
+      if (match.message) {
+        output += `> ${match.message}\n`;
+      }
 
       if (showContext) {
         output += "```\n" + match.lines.trimEnd() + "\n```\n";
@@ -106,13 +263,55 @@ function formatResults(matches: AstGrepMatch[], showContext: boolean): string {
         output += "```\n" + match.text + "\n```\n";
       }
 
-      // Show captured metavariables if any
-      if (match.metaVariables && Object.keys(match.metaVariables).length > 0) {
-        output += "Captures: ";
-        const captures = Object.entries(match.metaVariables)
-          .map(([k, v]) => `${k}=\`${v.text}\``)
-          .join(", ");
-        output += captures + "\n";
+      // Show captured metavariables
+      const captures: string[] = [];
+
+      if (match.metaVariables) {
+        const mv = match.metaVariables;
+        if (mv.single) {
+          for (const [k, v] of Object.entries(mv.single)) {
+            captures.push(`${k}=\`${v.text}\``);
+          }
+        }
+        if (mv.multi) {
+          for (const [k, items] of Object.entries(mv.multi)) {
+            const texts = items.map((i) => i.text).join(", ");
+            captures.push(`${k}=[${texts}]`);
+          }
+        }
+        if (mv.transformed) {
+          for (const [k, v] of Object.entries(mv.transformed)) {
+            captures.push(`${k}=\`${v.text}\``);
+          }
+        }
+      }
+
+      // Backward compat: old flat metaVariables format (Record<string, {text}>)
+      if (
+        match.metaVariables &&
+        !("single" in match.metaVariables) &&
+        !("multi" in match.metaVariables) &&
+        !("transformed" in match.metaVariables)
+      ) {
+        const flat = match.metaVariables as unknown as Record<
+          string,
+          { text: string }
+        >;
+        for (const [k, v] of Object.entries(flat)) {
+          if (v && typeof v === "object" && "text" in v) {
+            captures.push(`${k}=\`${v.text}\``);
+          }
+        }
+      }
+
+      if (captures.length > 0) {
+        output += "Captures: " + captures.join(", ") + "\n";
+      }
+
+      // Show labels from scan output
+      if (match.labels && match.labels.length > 0) {
+        output += "Labels: " + match.labels.map((l) => l.text).join(", ") +
+          "\n";
       }
 
       output += "\n";
@@ -122,40 +321,166 @@ function formatResults(matches: AstGrepMatch[], showContext: boolean): string {
   return output.trim();
 }
 
+// ---------------------------------------------------------------------------
+// Tool description (embeds condensed rule reference)
+// ---------------------------------------------------------------------------
+
+const TOOL_DESCRIPTION =
+  `Search code using AST patterns with ast-grep. More powerful than text search because it understands code structure.
+
+## Modes
+
+### pattern — Simple pattern search
+Runs \`ast-grep run --pattern\`. Best for quick, single-node matches.
+
+### rule — Complex YAML rule search
+Runs \`ast-grep scan --rule\`. Pass the YAML body under the \`rule:\` key (the extension wraps it in a full rule file). Best for relational and composite logic.
+
+### inspect — AST structure dump
+Runs \`ast-grep run --debug-query\`. Dumps the AST/CST/pattern tree. Use this to discover node kinds and debug patterns.
+
+## Metavariable Syntax
+
+- \`$VAR\` — captures a single named AST node (e.g. \`$NAME\`, \`$EXPR\`)
+- \`$$VAR\` — captures a single unnamed node (operators, punctuation)
+- \`$$$VAR\` — captures zero or more nodes (spread/variadic)
+- \`$_VAR\` — non-capturing wildcard (matches but doesn't bind)
+
+Metavariable names must be UPPER_SNAKE_CASE. Reusing a name enforces equality (\`$A == $A\` matches \`x == x\` but not \`x == y\`).
+
+## Rule Syntax (for rule mode)
+
+### Atomic rules
+- \`pattern: <code>\` — match by code pattern with metavariables
+- \`kind: <node_type>\` — match by Tree-sitter node kind (e.g. \`function_declaration\`, \`call_expression\`)
+- \`regex: <rust_regex>\` — match node text by regex
+- \`nthChild: <n>\` — match by 1-based index among siblings
+
+### Pattern object form
+\`\`\`yaml
+pattern:
+  selector: field_definition
+  context: "class { $F }"
+  strictness: relaxed   # cst | smart | ast | relaxed | signature
+\`\`\`
+
+### Relational rules
+- \`has: { <sub-rule>, stopBy: end }\` — target must have descendant matching sub-rule
+- \`inside: { <sub-rule>, stopBy: end }\` — target must be inside ancestor matching sub-rule
+- \`precedes: { <sub-rule> }\` — target must appear before matching sibling
+- \`follows: { <sub-rule> }\` — target must appear after matching sibling
+
+**IMPORTANT**: Always use \`stopBy: end\` with \`has\` and \`inside\` to search the full subtree. Without it, search stops at the first non-matching node.
+
+\`field: <name>\` restricts \`has\`/\`inside\` to a specific child field.
+
+### Composite rules
+- \`all: [<rule>, ...]\` — AND: all sub-rules must match (order guaranteed)
+- \`any: [<rule>, ...]\` — OR: at least one sub-rule must match
+- \`not: <rule>\` — negation: sub-rule must NOT match
+- \`matches: <rule-id>\` — reference a utility rule by ID
+
+### Common examples
+
+**Functions containing await:**
+\`\`\`yaml
+kind: function_declaration
+has:
+  pattern: await $EXPR
+  stopBy: end
+\`\`\`
+
+**console.log inside class methods:**
+\`\`\`yaml
+pattern: console.log($$$)
+inside:
+  kind: method_definition
+  stopBy: end
+\`\`\`
+
+**Async functions without try-catch:**
+\`\`\`yaml
+all:
+  - kind: function_declaration
+  - has:
+      pattern: await $EXPR
+      stopBy: end
+  - not:
+      has:
+        pattern: "try { $$$ } catch ($E) { $$$ }"
+        stopBy: end
+\`\`\`
+
+## Tips
+
+1. Start with a simple \`pattern\` search. Escalate to \`rule\` mode only when you need relational/composite logic.
+2. Use \`inspect\` mode to discover node kinds and verify how code is parsed.
+3. Always add \`stopBy: end\` to \`has\`/\`inside\` rules.
+4. If a pattern doesn't match, simplify it and use \`inspect\` to check the AST structure.
+5. For rule mode, pass only the YAML body (what goes under \`rule:\`). The extension adds the wrapper.
+
+Languages: javascript, typescript, python, rust, go, java, c, cpp, css, html, and more.`;
+
+// ---------------------------------------------------------------------------
+// Extension entry point
+// ---------------------------------------------------------------------------
+
 export default function (pi: ExtensionAPI) {
   pi.registerTool({
     name: "ast_grep",
-    description: `Search code using AST patterns with ast-grep. More powerful than text search because it understands code structure.
-
-Pattern syntax:
-- $NAME matches any single AST node and captures it
-- $$$NAME matches zero or more nodes (spread)
-- Literal code matches exactly
-
-Examples:
-- \`console.log($MSG)\` - find console.log calls
-- \`function $NAME($$$ARGS) { $$$BODY }\` - find function declarations
-- \`if ($COND) { $$$THEN }\` - find if statements
-- \`import $NAME from '$PATH'\` - find imports
-
-Languages: javascript, typescript, python, rust, go, java, c, cpp, etc.`,
+    description: TOOL_DESCRIPTION,
     parameters: Type.Object({
-      pattern: Type.String({
-        description: "AST pattern to search for. Use $VAR for wildcards, $$$ for spread.",
-      }),
+      mode: Type.Union(
+        [
+          Type.Literal("pattern"),
+          Type.Literal("rule"),
+          Type.Literal("inspect"),
+        ],
+        {
+          description:
+            "Search mode: pattern (simple search), rule (complex YAML rule), inspect (AST dump)",
+        },
+      ),
+      pattern: Type.Optional(
+        Type.String({
+          description:
+            "AST pattern to search for (pattern + inspect modes). Use $VAR for wildcards, $$$ for spread.",
+        }),
+      ),
+      rule: Type.Optional(
+        Type.String({
+          description:
+            'YAML rule body for rule mode. This is the content under the `rule:` key (e.g. "kind: function_declaration\\nhas:\\n  pattern: await $EXPR\\n  stopBy: end").',
+        }),
+      ),
+      inspect_format: Type.Optional(
+        Type.Union(
+          [
+            Type.Literal("ast"),
+            Type.Literal("cst"),
+            Type.Literal("pattern"),
+          ],
+          {
+            description:
+              "Output format for inspect mode: ast (named nodes only, default), cst (all nodes including punctuation), pattern (how ast-grep interprets the pattern).",
+          },
+        ),
+      ),
       lang: Type.Optional(
         Type.String({
-          description: "Language (e.g., typescript, python, rust). Auto-detected if not specified.",
+          description:
+            "Language (e.g. typescript, python, rust). Required for rule and inspect modes. Auto-detected for pattern mode if omitted.",
         }),
       ),
       paths: Type.Optional(
         Type.Array(Type.String(), {
-          description: "Paths to search (default: current directory)",
+          description: 'Directories/files to search (default: ".")',
         }),
       ),
       globs: Type.Optional(
         Type.Array(Type.String(), {
-          description: "Glob patterns to include/exclude (e.g., '*.ts', '!node_modules')",
+          description:
+            "Glob patterns to include/exclude (e.g. '*.ts', '!node_modules')",
         }),
       ),
       context: Type.Optional(
@@ -165,57 +490,267 @@ Languages: javascript, typescript, python, rust, go, java, c, cpp, etc.`,
       ),
       limit: Type.Optional(
         Type.Number({
-          description: "Maximum number of matches to return (default: 50)",
+          description:
+            "Maximum number of matches to return (default: 50). Only applies to pattern and rule modes.",
         }),
       ),
     }),
-    async execute(_toolCallId, params, onUpdate, ctx, _signal) {
-      try {
-        const args: string[] = ["run", "--pattern", params.pattern, "--json=compact"];
 
-        if (params.lang) {
-          args.push("--lang", params.lang);
+    async execute(_toolCallId, params, onUpdate, ctx, _signal) {
+      const p = params as AstGrepParams;
+
+      try {
+        // -----------------------------------------------------------------
+        // Pattern mode
+        // -----------------------------------------------------------------
+        if (p.mode === "pattern") {
+          if (!p.pattern) {
+            return {
+              content: [
+                {
+                  type: "text",
+                  text:
+                    "Error: `pattern` parameter is required for pattern mode.",
+                },
+              ],
+              isError: true,
+            };
+          }
+
+          const args: string[] = [
+            "run",
+            "--pattern",
+            p.pattern,
+            "--json=compact",
+          ];
+          addSharedArgs(args, p);
+
+          onUpdate?.({
+            content: [
+              {
+                type: "text",
+                text: `Searching for pattern: ${p.pattern}...`,
+              },
+            ],
+          });
+
+          let matches = await runAstGrep(args, ctx.cwd);
+          const limit = p.limit ?? 50;
+          const truncated = matches.length > limit;
+          if (truncated) {
+            matches = matches.slice(0, limit);
+          }
+
+          let output = formatResults(matches, p.context ?? false);
+          if (truncated) {
+            output += `\n\n_Results truncated to ${limit} matches._`;
+          }
+
+          return {
+            content: [{ type: "text", text: output }],
+            details: { mode: "pattern", matchCount: matches.length, truncated },
+          };
         }
 
-        if (params.globs) {
-          for (const glob of params.globs) {
-            args.push("--globs", glob);
+        // -----------------------------------------------------------------
+        // Rule mode
+        // -----------------------------------------------------------------
+        if (p.mode === "rule") {
+          if (!p.rule) {
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: "Error: `rule` parameter is required for rule mode.",
+                },
+              ],
+              isError: true,
+            };
+          }
+          if (!p.lang) {
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: "Error: `lang` parameter is required for rule mode.",
+                },
+              ],
+              isError: true,
+            };
+          }
+
+          const { dir, filePath } = writeRuleToTempFile(p.lang, p.rule);
+
+          try {
+            const args: string[] = [
+              "scan",
+              "--rule",
+              filePath,
+              "--json=compact",
+            ];
+            addSharedArgs(args, p);
+
+            onUpdate?.({
+              content: [
+                {
+                  type: "text",
+                  text: `Scanning with YAML rule (${p.lang})...`,
+                },
+              ],
+            });
+
+            let matches = await runAstGrep(args, ctx.cwd);
+            const limit = p.limit ?? 50;
+            const truncated = matches.length > limit;
+            if (truncated) {
+              matches = matches.slice(0, limit);
+            }
+
+            let output = formatResults(matches, p.context ?? false);
+            if (truncated) {
+              output += `\n\n_Results truncated to ${limit} matches._`;
+            }
+
+            return {
+              content: [{ type: "text", text: output }],
+              details: {
+                mode: "rule",
+                matchCount: matches.length,
+                truncated,
+              },
+            };
+          } finally {
+            cleanupTempFile(dir, filePath);
           }
         }
 
-        if (params.context) {
-          args.push("--context", "2");
+        // -----------------------------------------------------------------
+        // Inspect mode
+        // -----------------------------------------------------------------
+        if (p.mode === "inspect") {
+          if (!p.pattern) {
+            return {
+              content: [
+                {
+                  type: "text",
+                  text:
+                    "Error: `pattern` parameter is required for inspect mode.",
+                },
+              ],
+              isError: true,
+            };
+          }
+          if (!p.lang) {
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: "Error: `lang` parameter is required for inspect mode.",
+                },
+              ],
+              isError: true,
+            };
+          }
+
+          const format = p.inspect_format ?? "ast";
+          const args: string[] = [
+            "run",
+            "--pattern",
+            p.pattern,
+            "--lang",
+            p.lang,
+            `--debug-query=${format}`,
+          ];
+
+          onUpdate?.({
+            content: [
+              {
+                type: "text",
+                text: `Inspecting AST (${format}) for: ${p.pattern}...`,
+              },
+            ],
+          });
+
+          const output = await runAstGrepRaw(args, ctx.cwd);
+
+          return {
+            content: [{ type: "text", text: output }],
+            details: { mode: "inspect", format },
+          };
         }
 
-        // Add paths or use current directory
-        if (params.paths && params.paths.length > 0) {
-          args.push(...params.paths);
-        } else {
-          args.push(".");
-        }
-
-        onUpdate?.({
-          content: [{ type: "text", text: `Searching for pattern: ${params.pattern}...` }],
-        });
-
-        let matches = await runAstGrep(args, ctx.cwd);
-
-        // Apply limit
-        const limit = params.limit ?? 50;
-        if (matches.length > limit) {
-          matches = matches.slice(0, limit);
-        }
-
-        const output = formatResults(matches, params.context ?? false);
-
-        return { content: [{ type: "text", text: output }] };
+        return {
+          content: [
+            {
+              type: "text",
+              text:
+                `Error: Unknown mode "${p.mode}". Use "pattern", "rule", or "inspect".`,
+            },
+          ],
+          isError: true,
+        };
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
         return {
-          content: [{ type: "text", text: `ast-grep search failed: ${msg}` }],
+          content: [{ type: "text", text: `ast-grep failed: ${msg}` }],
           isError: true,
         };
       }
+    },
+
+    renderCall(args, theme) {
+      const p = args as AstGrepParams;
+      let text = theme.fg("toolTitle", theme.bold("ast-grep "));
+
+      if (p.mode === "pattern") {
+        text += theme.fg("accent", "pattern") +
+          " " +
+          theme.fg("muted", p.pattern ?? "");
+      } else if (p.mode === "rule") {
+        const preview = p.rule && p.rule.length > 60
+          ? p.rule.slice(0, 60) + "…"
+          : (p.rule ?? "");
+        text += theme.fg("accent", "rule") +
+          " " +
+          theme.fg("muted", preview.replace(/\n/g, " "));
+      } else if (p.mode === "inspect") {
+        text += theme.fg("accent", `inspect:${p.inspect_format ?? "ast"}`) +
+          " " +
+          theme.fg("muted", p.pattern ?? "");
+      }
+
+      if (p.lang) {
+        text += " " + theme.fg("dim", `[${p.lang}]`);
+      }
+
+      return new Text(text, 0, 0);
+    },
+
+    renderResult(result, { expanded }, theme) {
+      const text = result.content
+        ?.filter((c: { type: string }) => c.type === "text")
+        .map((c: { text: string }) => c.text)
+        .join("\n") ?? "";
+
+      const lines = text.split("\n");
+
+      if (!expanded) {
+        const COLLAPSED_LINES = 8;
+        const preview = lines.slice(0, COLLAPSED_LINES).join("\n");
+        const remaining = lines.length - COLLAPSED_LINES;
+        let collapsed = preview;
+        if (remaining > 0) {
+          collapsed += "\n" +
+            theme.fg("dim", `… ${remaining} more lines (Ctrl+O to expand)`);
+        }
+        return new Text(collapsed, 0, 0);
+      }
+
+      // Expanded: render as markdown
+      const container = new Container();
+      const mdTheme = getMarkdownTheme(theme);
+      container.addChild(new Markdown(text, 0, 0, mdTheme));
+      return container;
     },
   });
 }
