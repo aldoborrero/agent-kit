@@ -89,14 +89,39 @@ def list_extensions(skillz_dir: Path) -> list[str]:
 
 
 def list_skills(skillz_dir: Path) -> list[str]:
+    """List available skills.
+
+    Flat skills (skills/foo/SKILL.md) return "foo".
+    Collection skills (skills/collection/bar/SKILL.md) return "collection/bar".
+    """
     skills_dir = skillz_dir / "skills"
     if not skills_dir.is_dir():
         return []
     names: set[str] = set()
     for f in skills_dir.rglob("SKILL.md"):
         rel = f.relative_to(skills_dir)
-        names.add(rel.parts[0])
+        skill_dir = rel.parent
+        if len(skill_dir.parts) == 1:
+            # Flat skill: skills/foo/SKILL.md -> "foo"
+            names.add(skill_dir.parts[0])
+        elif len(skill_dir.parts) >= 2:
+            # Collection skill: skills/collection/bar/SKILL.md -> "collection/bar"
+            names.add(str(Path(skill_dir.parts[0]) / skill_dir.parts[1]))
     return sorted(names)
+
+
+def list_agents(skillz_dir: Path) -> list[str]:
+    agents_dir = skillz_dir / "pi" / "agents"
+    if not agents_dir.is_dir():
+        return []
+    return sorted(f.stem for f in agents_dir.glob("*.md") if f.is_file())
+
+
+def list_prompts(skillz_dir: Path) -> list[str]:
+    prompts_dir = skillz_dir / "pi" / "prompts"
+    if not prompts_dir.is_dir():
+        return []
+    return sorted(f.stem for f in prompts_dir.glob("*.md") if f.is_file())
 
 
 def list_themes(skillz_dir: Path) -> list[str]:
@@ -109,7 +134,7 @@ def list_themes(skillz_dir: Path) -> list[str]:
 def get_extension_source(skillz_dir: Path, name: str) -> ExtensionSource | None:
     ext_dir = skillz_dir / "pi" / "extensions"
 
-    # Check for directory with .ts file
+    # Check for directory with .ts file(s)
     candidate = ext_dir / name
     if candidate.is_dir():
         ts_files = [
@@ -118,7 +143,13 @@ def get_extension_source(skillz_dir: Path, name: str) -> ExtensionSource | None:
             if f.suffix == ".ts" and not f.name.endswith(".d.ts") and f.is_file()
         ]
         if ts_files:
-            if (candidate / "package.json").is_file():
+            # Directory extension if: has package.json, has multiple .ts files,
+            # or has an index.ts entry point
+            if (
+                (candidate / "package.json").is_file()
+                or len(ts_files) > 1
+                or (candidate / "index.ts").is_file()
+            ):
                 return ExtensionSource(candidate, is_directory=True)
             return ExtensionSource(ts_files[0], is_directory=False)
 
@@ -131,8 +162,29 @@ def get_extension_source(skillz_dir: Path, name: str) -> ExtensionSource | None:
 
 
 def get_skill_source(skillz_dir: Path, name: str) -> Path | None:
+    """Resolve a skill name to its source directory.
+
+    Supports flat ("ast-grep") and collection ("superpowers/brainstorming") names.
+    A collection name without a sub-skill ("superpowers") returns the collection
+    directory itself if it contains sub-skill directories.
+    """
     candidate = skillz_dir / "skills" / name
-    return candidate if candidate.is_dir() else None
+    if candidate.is_dir():
+        return candidate
+    return None
+
+
+def is_skill_collection(skillz_dir: Path, name: str) -> bool:
+    """Check if a name refers to a skill collection (directory of sub-skills)."""
+    candidate = skillz_dir / "skills" / name
+    if not candidate.is_dir():
+        return False
+    # A collection has subdirectories with SKILL.md, not a SKILL.md at root
+    has_own_skill = (candidate / "SKILL.md").is_file()
+    has_sub_skills = any(
+        f.parent != candidate for f in candidate.rglob("SKILL.md")
+    )
+    return has_sub_skills and not has_own_skill
 
 
 # ─── Sync Functions ──────────────────────────────────────────────────────────
@@ -261,6 +313,19 @@ def sync_skills(
 
     if not items:
         items = list_skills(skillz_dir)
+    else:
+        # Expand collection names to individual sub-skills
+        expanded: list[str] = []
+        for name in items:
+            if is_skill_collection(skillz_dir, name):
+                sub_skills = [
+                    s for s in list_skills(skillz_dir) if s.startswith(name + "/")
+                ]
+                expanded.extend(sub_skills)
+            else:
+                expanded.append(name)
+        items = expanded
+
     if not items:
         warn("no skills found")
         return
@@ -323,6 +388,58 @@ def sync_config(skillz_dir: Path, agent_dir: Path) -> None:
         log(f"  {Colors.BOLD}{count}{Colors.NC} config file(s) synced")
 
 
+def sync_agents(
+    skillz_dir: Path, agent_dir: Path, items: list[str]
+) -> None:
+    agents_dst = agent_dir / "agents"
+    log(f"{Colors.BOLD}Syncing agents...{Colors.NC}")
+
+    if not items:
+        items = list_agents(skillz_dir)
+    if not items:
+        warn("no agents found")
+        return
+
+    count = 0
+    for name in items:
+        src = skillz_dir / "pi" / "agents" / f"{name}.md"
+        if not src.is_file():
+            warn(f"agent not found: {name}")
+            continue
+
+        dst = agents_dst / f"{name}.md"
+        if sync_file(src, dst, "agent"):
+            count += 1
+
+    log(f"  {Colors.BOLD}{count}{Colors.NC} agent(s) synced")
+
+
+def sync_prompts(
+    skillz_dir: Path, agent_dir: Path, items: list[str]
+) -> None:
+    prompts_dst = agent_dir / "prompts"
+    log(f"{Colors.BOLD}Syncing prompts...{Colors.NC}")
+
+    if not items:
+        items = list_prompts(skillz_dir)
+    if not items:
+        warn("no prompts found")
+        return
+
+    count = 0
+    for name in items:
+        src = skillz_dir / "pi" / "prompts" / f"{name}.md"
+        if not src.is_file():
+            warn(f"prompt not found: {name}")
+            continue
+
+        dst = prompts_dst / f"{name}.md"
+        if sync_file(src, dst, "prompt"):
+            count += 1
+
+    log(f"  {Colors.BOLD}{count}{Colors.NC} prompt(s) synced")
+
+
 # ─── Display Functions ───────────────────────────────────────────────────────
 
 
@@ -342,8 +459,37 @@ def show_list(skillz_dir: Path) -> None:
     if not skills:
         log("  (none)")
     else:
+        current_collection = None
         for skill in skills:
-            log(f"  - {skill}")
+            if "/" in skill:
+                collection, name = skill.split("/", 1)
+                if collection != current_collection:
+                    current_collection = collection
+                    log(f"  {Colors.BOLD}{collection}/{Colors.NC}")
+                log(f"    - {name}")
+            else:
+                current_collection = None
+                log(f"  - {skill}")
+
+    print()
+
+    log(f"{Colors.BOLD}Available agents:{Colors.NC}")
+    agents = list_agents(skillz_dir)
+    if not agents:
+        log("  (none)")
+    else:
+        for agent in agents:
+            log(f"  - {agent}")
+
+    print()
+
+    log(f"{Colors.BOLD}Available prompts:{Colors.NC}")
+    prompts = list_prompts(skillz_dir)
+    if not prompts:
+        log("  (none)")
+    else:
+        for prompt in prompts:
+            log(f"  - {prompt}")
 
     print()
 
@@ -366,6 +512,13 @@ def show_list(skillz_dir: Path) -> None:
     else:
         for theme in themes:
             log(f"  - {theme}")
+
+
+def _is_synced_collection(path: Path) -> bool:
+    """Check if a synced directory is a collection (contains sub-skill dirs, not a symlink)."""
+    if path.is_symlink():
+        return False
+    return any(child.is_dir() or child.is_symlink() for child in path.iterdir())
 
 
 def show_status(agent_dir: Path) -> None:
@@ -409,6 +562,16 @@ def show_status(agent_dir: Path) -> None:
             name = d.name
             if d.is_symlink():
                 log(f"  {C.GREEN}{name}{C.NC} -> {os.readlink(d)}")
+            elif _is_synced_collection(d):
+                # Collection directory — show sub-skills
+                log(f"  {C.BOLD}{name}/{C.NC}")
+                for sub in sorted(d.iterdir()):
+                    if not sub.is_dir() and not sub.is_symlink():
+                        continue
+                    if sub.is_symlink():
+                        log(f"    {C.GREEN}{sub.name}{C.NC} -> {os.readlink(sub)}")
+                    else:
+                        log(f"    {C.BLUE}{sub.name}{C.NC} (copied)")
             else:
                 log(f"  {C.BLUE}{name}{C.NC} (copied)")
         if not found:
@@ -431,6 +594,46 @@ def show_status(agent_dir: Path) -> None:
                 log(f"  {C.BLUE}{name}{C.NC} (copied)")
     if not has_config:
         log("  (none)")
+
+    print()
+
+    # Agents
+    log(f"{C.BOLD}Synced agents:{C.NC} ({agent_dir}/agents/)")
+    agents_dir = agent_dir / "agents"
+    if agents_dir.is_dir():
+        found = False
+        for f in sorted(agents_dir.iterdir()):
+            if f.suffix != ".md":
+                continue
+            found = True
+            if f.is_symlink():
+                log(f"  {C.GREEN}{f.name}{C.NC} -> {os.readlink(f)}")
+            else:
+                log(f"  {C.BLUE}{f.name}{C.NC} (copied)")
+        if not found:
+            log("  (none)")
+    else:
+        log("  (directory not found)")
+
+    print()
+
+    # Prompts
+    log(f"{C.BOLD}Synced prompts:{C.NC} ({agent_dir}/prompts/)")
+    prompts_dir = agent_dir / "prompts"
+    if prompts_dir.is_dir():
+        found = False
+        for f in sorted(prompts_dir.iterdir()):
+            if f.suffix != ".md":
+                continue
+            found = True
+            if f.is_symlink():
+                log(f"  {C.GREEN}{f.name}{C.NC} -> {os.readlink(f)}")
+            else:
+                log(f"  {C.BLUE}{f.name}{C.NC} (copied)")
+        if not found:
+            log("  (none)")
+    else:
+        log("  (directory not found)")
 
     print()
 
@@ -469,10 +672,12 @@ def build_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""\
 examples:
-  pi-sync all                     Sync extensions, skills, themes, and config
+  pi-sync all                     Sync everything
   pi-sync extensions              Sync all extensions
   pi-sync skills pexpect-cli      Sync specific skill
-  pi-sync themes                  Sync all themes
+  pi-sync skills superpowers      Sync all superpowers skills
+  pi-sync agents                  Sync all agent definitions
+  pi-sync prompts                 Sync all workflow prompts
   pi-sync themes catppuccin-mocha Sync specific theme
   pi-sync config                  Sync AGENTS.md and SYSTEM.md
   pi-sync --copy all              Copy instead of symlink
@@ -500,6 +705,8 @@ environment:
     sub = parser.add_subparsers(dest="command", metavar="COMMAND")
     sub.add_parser("extensions", help="Sync extensions (all if no names given)")
     sub.add_parser("skills", help="Sync skills (all if no names given)")
+    sub.add_parser("agents", help="Sync agent definitions (all if no names given)")
+    sub.add_parser("prompts", help="Sync workflow prompts (all if no names given)")
     sub.add_parser("themes", help="Sync themes (all if no names given)")
     sub.add_parser("config", help="Sync config files (AGENTS.md, SYSTEM.md)")
     sub.add_parser("all", help="Sync everything")
@@ -544,6 +751,10 @@ def main() -> None:
         sync_extensions(skillz_dir, agent_dir, items)
     elif cmd == "skills":
         sync_skills(skillz_dir, agent_dir, items)
+    elif cmd == "agents":
+        sync_agents(skillz_dir, agent_dir, items)
+    elif cmd == "prompts":
+        sync_prompts(skillz_dir, agent_dir, items)
     elif cmd == "themes":
         sync_themes(skillz_dir, agent_dir, items)
     elif cmd == "config":
@@ -552,6 +763,10 @@ def main() -> None:
         sync_extensions(skillz_dir, agent_dir, [])
         print()
         sync_skills(skillz_dir, agent_dir, [])
+        print()
+        sync_agents(skillz_dir, agent_dir, [])
+        print()
+        sync_prompts(skillz_dir, agent_dir, [])
         print()
         sync_themes(skillz_dir, agent_dir, [])
         print()
