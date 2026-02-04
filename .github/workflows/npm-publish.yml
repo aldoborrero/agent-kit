@@ -1,0 +1,42 @@
+# yaml-language-server: $schema=https://json.schemastore.org/github-workflow.json
+name: Publish to npm
+
+on:
+  push:
+    tags:
+      - "[0-9]+.[0-9]+.[0-9]+"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-slim
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install Nix
+        uses: cachix/install-nix-action@v31
+
+      - name: Verify and publish
+        run: |
+          nix develop --command bash -c '
+            bun -e "
+              const { version } = require(\"./package.json\");
+              const tag = process.env.GITHUB_REF_NAME;
+              if (version !== tag) {
+                console.error(\"Tag \" + tag + \" does not match package.json version \" + version);
+                process.exit(1);
+              }
+            "
+            echo "//registry.npmjs.org/:_authToken=$NODE_AUTH_TOKEN" > ~/.npmrc
+            bun publish --access public
+          '
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
