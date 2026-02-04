@@ -1,4 +1,4 @@
-# Skillz
+# Agent Kit
 
 A collection of skills and extensions for AI coding agents, including Claude Code skills and pi-coding-agent extensions.
 
@@ -13,51 +13,17 @@ This repository contains:
 ## Repository Structure
 
 ```
-skillz/
-├── skills/                   # Skills (Claude Code + pi-coding-agent)
-│   ├── ast-grep/             # AST-based structural code search
-│   ├── kagi-search/          # Privacy-focused search
-│   ├── pexpect-cli/          # Interactive CLI automation
-│   └── superpowers/          # Advanced agent workflow skills
-│       ├── brainstorming/
-│       ├── writing-plans/
-│       ├── executing-plans/
-│       ├── subagent-driven-development/
-│       ├── dispatching-parallel-agents/
-│       ├── test-driven-development/
-│       ├── systematic-debugging/
-│       ├── verification-before-completion/
-│       ├── requesting-code-review/
-│       ├── receiving-code-review/
-│       ├── using-git-worktrees/
-│       ├── finishing-a-development-branch/
-│       └── writing-skills/
+agent-kit/
+├── skills/           # Skills (Claude Code + pi-coding-agent)
+│   ├── ast-grep/     # AST-based structural code search
+│   ├── kagi-search/  # Privacy-focused search
+│   ├── pexpect-cli/  # Interactive CLI automation
+│   └── superpowers/  # 13 advanced workflow skills
 ├── pi/
-│   ├── agents/               # Agent definitions for pi-coding-agent
-│   │   ├── brainstormer.md   # Design dialogue (uses brainstorming skill)
-│   │   ├── debugger.md       # Systematic debugging specialist
-│   │   ├── planner.md        # Implementation planning (uses writing-plans skill)
-│   │   ├── reviewer.md       # Code review (uses requesting-code-review skill)
-│   │   ├── scout.md          # Fast codebase reconnaissance
-│   │   └── worker.md         # General-purpose implementation (uses TDD + verification skills)
-│   ├── extensions/           # Pi-coding-agent extensions
-│   │   ├── ast-grep/         # AST-based code search
-│   │   ├── direnv/           # Load direnv environment
-│   │   ├── github-search/    # GitHub code search
-│   │   ├── jina/             # Web content fetching
-│   │   ├── kagi-search/      # Kagi search integration
-│   │   ├── pexpect-cli/      # Interactive CLI automation
-│   │   ├── recorder/         # SQLite session recorder
-│   │   ├── subagent/         # Task delegation to subagents
-│   │   └── together-provider/ # Together AI model provider
-│   └── prompts/              # Workflow prompt templates
-│       ├── brainstorm.md     # Collaborative design dialogue
-│       ├── debug.md          # Scout → debugger chain
-│       ├── full-cycle.md     # Scout → planner → worker → reviewer → worker
-│       └── review.md         # Standalone code review
-└── packages/                 # Nix packages
-    ├── pexpect-cli/          # pexpect-cli CLI tool
-    └── pi-sync/              # Sync tool for pi extensions/skills
+│   ├── agents/       # Agent definitions (scout, planner, worker, etc.)
+│   ├── extensions/   # TypeScript extensions (9 tools)
+│   └── prompts/      # Workflow templates (brainstorm, debug, full-cycle)
+└── packages/         # Nix packages (pexpect-cli, pi-sync)
 ```
 
 ## Skills
@@ -156,8 +122,8 @@ pi-sync extensions
 pi-sync skills
 
 # Manual alternative
-ln -s /path/to/skillz/pi/extensions/github-search/github-search.ts ~/.pi/agent/extensions/
-ln -s /path/to/skillz/skills/pexpect-cli ~/.pi/agent/skills/
+ln -s /path/to/agent-kit/pi/extensions/github-search/github-search.ts ~/.pi/agent/extensions/
+ln -s /path/to/agent-kit/skills/pexpect-cli ~/.pi/agent/skills/
 ```
 
 ## Development
@@ -182,15 +148,6 @@ nix fmt
 # Run pi with a specific extension
 pi -e ./pi/extensions/github-search/github-search.ts
 ```
-
-## Contributing
-
-When adding new skills or extensions:
-
-1. **Skills**: Create `skills/<name>/SKILL.md` with frontmatter (`name`, `description`)
-2. **Extensions**: Create `pi/extensions/<name>/<name>.ts` exporting a default function
-3. Update this README
-4. Run `pi-sync list` to verify detection
 
 ## License
 
