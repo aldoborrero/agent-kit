@@ -1,0 +1,40 @@
+{
+  "name": "@aldoborrero/agent-kit",
+  "version": "1.0.0",
+  "description": "Reusable skills and extensions for Pi coding agent",
+  "type": "module",
+  "keywords": [
+    "pi-package",
+    "ai-agent",
+    "coding-assistant",
+    "skills",
+    "extensions"
+  ],
+  "author": "aldoborrero",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/aldoborrero/agent-kit.git"
+  },
+  "peerDependencies": {
+    "@mariozechner/pi-ai": "*",
+    "@mariozechner/pi-agent-core": "*",
+    "@mariozechner/pi-coding-agent": "*",
+    "@mariozechner/pi-tui": "*",
+    "@sinclair/typebox": "*"
+  },
+  "pi": {
+    "extensions": [
+      "pi/extensions/ast-grep",
+      "pi/extensions/direnv",
+      "pi/extensions/github-search",
+      "pi/extensions/jina",
+      "pi/extensions/kagi-search",
+      "pi/extensions/pexpect-cli",
+      "pi/extensions/questionnaire",
+      "pi/extensions/recorder",
+      "pi/extensions/subagent",
+      "pi/extensions/together-provider"
+    ]
+  }
+}
