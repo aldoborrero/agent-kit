@@ -1,12 +1,92 @@
-# Agent Guidelines for skillz
+# Agent Guidelines for agent-kit
+
+## Project Overview
+
+agent-kit is a toolkit for AI coding agents providing skills, extensions, and specialized agents for pi-coding-agent and Claude Code.
+
+## Directory Structure
+
+```
+agent-kit/
+├── skills/           # Markdown-based agent instructions
+│   ├── ast-grep/     # AST-based structural code search
+│   ├── kagi-search/  # Privacy-focused web search
+│   ├── pexpect-cli/  # Interactive CLI automation
+│   └── superpowers/  # 13 workflow skills (brainstorming, TDD, debugging, etc.)
+├── pi/
+│   ├── agents/       # Agent definitions (scout, planner, worker, reviewer, debugger, brainstormer)
+│   ├── extensions/   # TypeScript extensions (10 tools)
+│   └── prompts/      # Workflow templates (brainstorm, debug, full-cycle, review)
+└── packages/         # Nix packages (pexpect-cli, pi-sync)
+```
+
+## Key Conventions
+
+### Skills (`skills/`)
+- Each skill has a `SKILL.md` file with frontmatter (name, description, user-invocable flag)
+- Skills teach agents how to use external tools via markdown instructions
+- Compatible with both Claude Code and pi-coding-agent
+- Superpowers skills define workflows (TDD, debugging, planning) not tool usage
+
+### Pi Extensions (`pi/extensions/`)
+- TypeScript files that register tools with pi-coding-agent
+- Use event hooks (`session_start`, `tool_result`, etc.) for side effects
+- Prefer simple solutions over tool replacement
+- Each extension has its own directory with a README.md
+
+### Agents (`pi/agents/`)
+- Lean markdown system prompts that load skills at runtime
+- Located at `~/.pi/agent/agents/` when deployed
+- Reference skills from `~/.pi/agent/skills/`
+
+### Prompts (`pi/prompts/`)
+- Workflow templates that orchestrate agent chains via subagent extension
+- Define multi-agent pipelines (e.g., scout → planner → worker → reviewer)
+
+## Development
+
+### Nix Environment
+```bash
+nix develop          # Enter dev shell
+nix fmt              # Format code
+nix build .#pi-sync  # Build packages
+```
+
+### Testing Extensions
+```bash
+pi -e ./pi/extensions/example/example.ts
+```
+
+### Deploying to pi-coding-agent
+```bash
+pi-sync all          # Sync everything to ~/.pi/agent/
+```
+
+## Writing New Components
+
+### New Skill
+1. Create `skills/<name>/SKILL.md` with frontmatter
+2. Document the tool's CLI interface and usage patterns
+3. Include examples the agent can follow
+
+### New Extension
+1. Create `pi/extensions/<name>/<name>.ts`
+2. Add README.md documenting the extension
+3. Register tools via `pi.registerTool()` or use event hooks
+4. Add to `package.json` under `pi.extensions`
+
+### New Agent
+1. Create `pi/agents/<name>.md`
+2. Keep system prompt lean - load skills at runtime
+3. Define the agent's role and methodology
+
+---
 
 ## Pi Extension Development
 
 ### Extension Event Reference
 
 The pi-coding-agent provides 21 events that extensions can hook into. Events are categorized by their lifecycle phase.
-
----
 
 ### Session Events
 
@@ -47,8 +127,6 @@ pi.on("session_shutdown", async (event, ctx) => {
 });
 ```
 
----
-
 ### Agent Events
 
 | Event | When | Can Modify |
@@ -87,8 +165,6 @@ pi.on("turn_end", async (event, ctx) => {
 });
 ```
 
----
-
 ### Tool Events
 
 | Event | When | Capabilities |
@@ -118,8 +194,6 @@ pi.on("tool_result", async (event, ctx) => {
 });
 ```
 
----
-
 ### Input Events
 
 | Event | When | Capabilities |
@@ -145,8 +219,6 @@ pi.on("user_bash", async (event, ctx) => {
 });
 ```
 
----
-
 ### Model Events
 
 | Event | When | Capabilities |
@@ -160,8 +232,6 @@ pi.on("model_select", async (event, ctx) => {
   // Use for: update status bar, model-specific settings
 });
 ```
-
----
 
 ### Event Lifecycle
 
