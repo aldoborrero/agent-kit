@@ -35,6 +35,15 @@
       "pi/extensions/recorder",
       "pi/extensions/subagent",
       "pi/extensions/together-provider"
+    ],
+    "skills": [
+      "skills"
+    ],
+    "prompts": [
+      "pi/prompts"
+    ],
+    "themes": [
+      "pi/themes"
     ]
   }
 }
