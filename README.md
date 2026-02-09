@@ -23,7 +23,7 @@ agent-kit/
 │   ├── agents/       # Agent definitions (scout, planner, worker, etc.)
 │   ├── extensions/   # TypeScript extensions (9 tools)
 │   └── prompts/      # Workflow templates (brainstorm, debug, full-cycle)
-└── packages/         # Nix packages (pexpect-cli, pi-sync)
+└── packages/         # Nix packages (pexpect-cli)
 ```
 
 ## Skills
@@ -94,34 +94,14 @@ Workflow prompt templates that orchestrate agents into chains via the subagent e
 Nix-packaged CLI tools.
 
 - [`pexpect-cli`](packages/pexpect-cli/README.md): Persistent pexpect sessions via pueue -- server/client CLI for interactive automation
-- [`pi-sync`](packages/pi-sync/README.md): Sync extensions, skills, agents, prompts, and themes to `~/.pi/agent/` for pi-coding-agent
 
 ## Installation
 
-### Using Nix Flake
-
-```bash
-# Run pi-sync directly
-nix run .#pi-sync -- list
-nix run .#pi-sync -- all
-
-# Install to profile
-nix profile install .#pi-sync
-```
-
 ### Setup for pi-coding-agent
 
-Use `pi-sync` to symlink extensions and skills to `~/.pi/agent/`:
+Symlink extensions and skills to `~/.pi/agent/`:
 
 ```bash
-# Sync everything
-pi-sync all
-
-# Or sync separately
-pi-sync extensions
-pi-sync skills
-
-# Manual alternative
 ln -s /path/to/agent-kit/pi/extensions/github-search/github-search.ts ~/.pi/agent/extensions/
 ln -s /path/to/agent-kit/skills/pexpect-cli ~/.pi/agent/skills/
 ```
@@ -134,8 +114,7 @@ ln -s /path/to/agent-kit/skills/pexpect-cli ~/.pi/agent/skills/
 # Enter dev shell
 nix develop
 
-# Build all packages
-nix build .#pi-sync
+# Build packages
 nix build .#pexpect-cli
 
 # Format code
