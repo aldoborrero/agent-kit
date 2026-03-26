@@ -7,11 +7,14 @@ Toggle-to-record speech-to-text input for pi-coding-agent. Multiple STT backends
 | Command | Description |
 |---------|-------------|
 | `/voice` | Toggle recording (start/stop) |
+| `/voice config` | Open interactive settings panel (provider, language, mode) |
 | `/voice cancel` | Cancel recording without transcribing |
-| `/voice provider <groq\|openai\|daemon>` | Switch STT provider |
+| `/voice provider <auto\|groq\|openai\|daemon>` | Switch STT provider |
 | `/voice lang <code>` | Set transcription language (default: `en`) |
 | `/voice mode <paste\|send>` | Set output mode (`paste` = editor, `send` = auto-submit) |
 | `/voice status` | Show current configuration |
+
+All subcommands support tab completion — type `/voice ` and press Tab.
 
 ## Keyboard Shortcut
 
@@ -38,13 +41,17 @@ Example: [nvrxq/claude-code-voice](https://github.com/nvrxq/claude-code-voice) (
 
 ## Configuration
 
+Settings are persisted to `~/.pi/voice.json` and restored on every session start. Changes made via `/voice config` or the inline subcommands are saved automatically.
+
+Persisted config takes priority over env vars.
+
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `GROQ_API_KEY` | — | Groq Whisper API key |
 | `OPENAI_API_KEY` | — | OpenAI Whisper API key |
 | `VOICE_DAEMON_URL` | `http://localhost:8765` | Local whisper daemon URL |
-| `VOICE_LANG` | `en` | Transcription language |
-| `VOICE_MODE` | `paste` | Output: `paste` (editor) or `send` (auto-submit) |
+| `VOICE_LANG` | `en` | Transcription language (env var fallback) |
+| `VOICE_MODE` | `paste` | Output mode (env var fallback) |
 
 ## System Dependencies
 
@@ -57,13 +64,17 @@ Not needed when using the daemon provider (daemon handles audio capture).
 
 | State | Display |
 |-------|---------|
-| Recording (with level) | `● recording ▁▃▅▇` |
-| Recording (daemon) | `● recording` |
-| Transcribing | `● transcribing...` |
-| Error | `● voice error` (clears after 3s) |
+| Idle | `voice:groq` (provider shown quietly in status bar) |
+| Recording (with level) | `● REC ▁▃▅▇` |
+| Recording (daemon) | `● REC` |
+| Transcribing | `● transcribing…` |
+| Error | `● <message>` (clears after 3s) |
 
 ## Features
 
+- **Persistent config** — provider, language, and mode saved to `~/.pi/voice.json`
+- **Interactive settings** — `/voice config` opens a navigable settings panel
+- **Tab completion** — `/voice [tab]` shows available subcommands
 - Auto-stop on 2 seconds of silence
 - Max recording duration: 60 seconds
 - Project context hints (package name + git branch) improve coding term recognition

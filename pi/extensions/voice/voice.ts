@@ -7,23 +7,64 @@
  * Usage:
  *   Ctrl+Alt+V  — toggle recording
  *   /voice            — toggle recording
+ *   /voice config     — open interactive settings panel
  *   /voice cancel     — cancel active recording
- *   /voice provider <groq|openai|daemon>
+ *   /voice provider <auto|groq|openai|daemon>
  *   /voice lang <code>
  *   /voice mode <paste|send>
  *   /voice status     — show current configuration
+ *
+ * Config is persisted to ~/.pi/voice.json between sessions.
  */
 
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { homedir } from "node:os";
+import { join } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
-import { Key } from "@mariozechner/pi-tui";
-import { SpawnRecorder, DaemonRecorder, type Recorder } from "./recorder.js";
-import { createProvider, detectProvider, type STTProvider, type ProviderName } from "./providers.js";
+import { DynamicBorder, getSettingsListTheme } from "@mariozechner/pi-coding-agent";
+import { Container, Key, type SettingItem, SettingsList, Text } from "@mariozechner/pi-tui";
+import { createProvider, detectProvider, type ProviderName, type STTProvider } from "./providers.js";
+import { DaemonRecorder, type Recorder, SpawnRecorder } from "./recorder.js";
 
 type State = "idle" | "recording" | "transcribing";
 
 const LEVEL_BARS = "▁▃▅▇";
 const LEVEL_METER_INTERVAL_MS = 100;
 const MIN_AUDIO_LENGTH = 16000;
+
+const CONFIG_FILE = join(homedir(), ".pi", "voice.json");
+
+const PROVIDER_VALUES = ["auto", "groq", "openai", "daemon"] as const;
+const LANG_VALUES = ["en", "fr", "de", "es", "it", "pt", "zh", "ja", "ko", "ru", "ar"] as const;
+const MODE_VALUES = ["paste", "send"] as const;
+
+type ProviderSetting = (typeof PROVIDER_VALUES)[number];
+
+interface SavedConfig {
+	provider?: ProviderName;
+	lang: string;
+	mode: "paste" | "send";
+}
+
+async function loadSavedConfig(): Promise<Partial<SavedConfig>> {
+	try {
+		const raw = await readFile(CONFIG_FILE, "utf8");
+		return JSON.parse(raw) as Partial<SavedConfig>;
+	} catch {
+		return {};
+	}
+}
+
+async function persistConfig(lang: string, mode: "paste" | "send", provider: ProviderName | null): Promise<void> {
+	try {
+		const saved: SavedConfig = { lang, mode };
+		if (provider) saved.provider = provider;
+		await mkdir(join(homedir(), ".pi"), { recursive: true });
+		await writeFile(CONFIG_FILE, JSON.stringify(saved, null, 2), "utf8");
+	} catch {
+		// Non-critical
+	}
+}
 
 export default function voiceExtension(pi: ExtensionAPI) {
 	let state: State = "idle";
@@ -78,7 +119,11 @@ export default function voiceExtension(pi: ExtensionAPI) {
 
 		switch (state) {
 			case "idle":
-				ctx.ui.setStatus("voice", undefined);
+				// Show provider name quietly in footer — no popup
+				ctx.ui.setStatus(
+					"voice",
+					providerName ? ctx.ui.theme.fg("muted", `voice:${providerName}`) : undefined,
+				);
 				break;
 			case "recording": {
 				const bars = recorder?.hasLevel()
@@ -121,7 +166,7 @@ export default function voiceExtension(pi: ExtensionAPI) {
 
 	function startRecording(ctx: ExtensionContext): void {
 		if (!provider || !recorder) {
-			showError(ctx, "No STT provider configured. Set GROQ_API_KEY, OPENAI_API_KEY, or VOICE_DAEMON_URL.");
+			showError(ctx, "No STT provider. Set GROQ_API_KEY, OPENAI_API_KEY, or VOICE_DAEMON_URL — or run /voice config.");
 			return;
 		}
 
@@ -242,7 +287,14 @@ export default function voiceExtension(pi: ExtensionAPI) {
 	// ─── Command ────────────────────────────────────────────────────
 
 	pi.registerCommand("voice", {
-		description: "Voice input — toggle recording or configure (cancel | provider | lang | mode | status)",
+		description: "Voice input — toggle recording or configure (config | cancel | status | provider | lang | mode)",
+
+		getArgumentCompletions: (prefix: string) => {
+			const subs = ["config", "cancel", "status", "provider", "lang", "mode"];
+			const filtered = subs.filter((s) => s.startsWith(prefix));
+			return filtered.length > 0 ? filtered.map((s) => ({ value: s, label: s })) : null;
+		},
+
 		handler: async (args, ctx) => {
 			const parts = args.trim().split(/\s+/);
 			const sub = parts[0]?.toLowerCase() ?? "";
@@ -258,13 +310,90 @@ export default function voiceExtension(pi: ExtensionAPI) {
 					if (ctx.hasUI) ctx.ui.notify("Recording cancelled", "info");
 					break;
 
+				// ─── Interactive config panel ────────────────────────────
+				case "config": {
+					const currentProvider: ProviderSetting = providerName ?? "auto";
+					const langValues: string[] = LANG_VALUES.includes(config.lang as (typeof LANG_VALUES)[number])
+						? [...LANG_VALUES]
+						: [config.lang, ...LANG_VALUES];
+
+					const items: SettingItem[] = [
+						{
+							id: "provider",
+							label: "STT Provider",
+							currentValue: currentProvider,
+							values: [...PROVIDER_VALUES],
+						},
+						{
+							id: "lang",
+							label: "Language",
+							currentValue: config.lang,
+							values: langValues,
+						},
+						{
+							id: "mode",
+							label: "Output Mode",
+							currentValue: config.mode,
+							values: [...MODE_VALUES],
+						},
+					];
+
+					await ctx.ui.custom((tui, theme, _kb, done) => {
+						const container = new Container();
+						container.addChild(new DynamicBorder((s: string) => theme.fg("accent", s)));
+						container.addChild(new Text(theme.fg("accent", theme.bold(" Voice Settings")), 1, 0));
+
+						const settingsList = new SettingsList(
+							items,
+							Math.min(items.length + 4, 12),
+							getSettingsListTheme(),
+							(id, newValue) => {
+								if (id === "provider") {
+									initProvider(newValue === "auto" ? undefined : (newValue as ProviderName));
+								} else if (id === "lang") {
+									config.lang = newValue;
+								} else if (id === "mode") {
+									config.mode = newValue as "paste" | "send";
+								}
+								updateStatus(ctx);
+								persistConfig(config.lang, config.mode, providerName).catch(() => {});
+							},
+							() => done(undefined),
+						);
+
+						container.addChild(settingsList);
+						container.addChild(
+							new Text(theme.fg("dim", " ↑↓ navigate  •  space/enter cycle  •  esc close"), 1, 0),
+						);
+						container.addChild(new DynamicBorder((s: string) => theme.fg("accent", s)));
+
+						return {
+							render: (w) => container.render(w),
+							invalidate: () => container.invalidate(),
+							handleInput: (data) => {
+								settingsList.handleInput?.(data);
+								tui.requestRender();
+							},
+						};
+					});
+					break;
+				}
+
+				// ─── Inline setters (kept for backward compat / scripting) ──
 				case "provider": {
 					const name = parts[1]?.toLowerCase();
-					if (name === "groq" || name === "openai" || name === "daemon") {
+					if (name === "auto") {
+						initProvider();
+						updateStatus(ctx);
+						await persistConfig(config.lang, config.mode, providerName);
+						if (ctx.hasUI) ctx.ui.notify(`Voice provider: auto-detect → ${providerName ?? "none"}`, "info");
+					} else if (name === "groq" || name === "openai" || name === "daemon") {
 						initProvider(name);
-						if (ctx.hasUI) ctx.ui.notify(`Voice provider set to ${name}`, "info");
+						updateStatus(ctx);
+						await persistConfig(config.lang, config.mode, providerName);
+						if (ctx.hasUI) ctx.ui.notify(`Voice provider: ${name}`, "info");
 					} else {
-						if (ctx.hasUI) ctx.ui.notify("Usage: /voice provider <groq|openai|daemon>", "error");
+						if (ctx.hasUI) ctx.ui.notify("Usage: /voice provider <auto|groq|openai|daemon>", "error");
 					}
 					break;
 				}
@@ -273,9 +402,10 @@ export default function voiceExtension(pi: ExtensionAPI) {
 					const code = parts[1];
 					if (code) {
 						config.lang = code;
-						if (ctx.hasUI) ctx.ui.notify(`Voice language set to ${code}`, "info");
+						await persistConfig(config.lang, config.mode, providerName);
+						if (ctx.hasUI) ctx.ui.notify(`Voice language: ${code}`, "info");
 					} else {
-						if (ctx.hasUI) ctx.ui.notify(`Current language: ${config.lang}`, "info");
+						if (ctx.hasUI) ctx.ui.notify(`Voice language: ${config.lang}`, "info");
 					}
 					break;
 				}
@@ -284,7 +414,8 @@ export default function voiceExtension(pi: ExtensionAPI) {
 					const mode = parts[1]?.toLowerCase();
 					if (mode === "paste" || mode === "send") {
 						config.mode = mode;
-						if (ctx.hasUI) ctx.ui.notify(`Voice mode set to ${mode}`, "info");
+						await persistConfig(config.lang, config.mode, providerName);
+						if (ctx.hasUI) ctx.ui.notify(`Voice mode: ${mode}`, "info");
 					} else {
 						if (ctx.hasUI) ctx.ui.notify("Usage: /voice mode <paste|send>", "error");
 					}
@@ -292,21 +423,21 @@ export default function voiceExtension(pi: ExtensionAPI) {
 				}
 
 				case "status": {
-					const info = [
-						`Provider: ${providerName ?? "none"}`,
-						`Language: ${config.lang}`,
-						`Mode: ${config.mode}`,
-						`Recorder: ${recorder?.constructor.name ?? "none"}`,
-						`State: ${state}`,
-					].join("\n");
-					if (ctx.hasUI) ctx.ui.notify(info, "info");
+					const lines = [
+						`Provider : ${providerName ?? "none (run /voice config)"}`,
+						`Language : ${config.lang}`,
+						`Mode     : ${config.mode}`,
+						`State    : ${state}`,
+						`Recorder : ${recorder?.constructor.name ?? "none"}`,
+					];
+					if (ctx.hasUI) ctx.ui.notify(lines.join("\n"), "info");
 					break;
 				}
 
 				default:
 					if (ctx.hasUI) {
 						ctx.ui.notify(
-							"Usage: /voice [cancel | provider <name> | lang <code> | mode <paste|send> | status]",
+							"Usage: /voice [config | cancel | status | provider <name> | lang <code> | mode <paste|send>]",
 							"error",
 						);
 					}
@@ -318,9 +449,17 @@ export default function voiceExtension(pi: ExtensionAPI) {
 	// ─── Events ─────────────────────────────────────────────────────
 
 	pi.on("session_start", async (_event, ctx) => {
+		// Load persisted config (takes priority over env vars)
+		const saved = await loadSavedConfig();
+		if (saved.lang) config.lang = saved.lang;
+		if (saved.mode) config.mode = saved.mode;
+
 		// Build hints from project context
 		try {
-			const nameResult = await pi.exec("bash", ["-c", "cat package.json 2>/dev/null | grep '\"name\"' | head -1 | sed 's/.*\"name\".*\"\\(.*\\)\".*/\\1/'"]);
+			const nameResult = await pi.exec("bash", [
+				"-c",
+				"cat package.json 2>/dev/null | grep '\"name\"' | head -1 | sed 's/.*\"name\".*\"\\(.*\\)\".*/\\1/'",
+			]);
 			const branchResult = await pi.exec("bash", ["-c", "git rev-parse --abbrev-ref HEAD 2>/dev/null"]);
 			const parts: string[] = [];
 			if (nameResult.stdout?.trim()) parts.push(nameResult.stdout.trim());
@@ -330,18 +469,15 @@ export default function voiceExtension(pi: ExtensionAPI) {
 			// Non-critical — hints are optional
 		}
 
-		// Auto-detect provider
-		initProvider();
+		// Init provider: prefer persisted choice, fall back to env-var auto-detect
+		initProvider(saved.provider);
 
-		if (providerName && ctx.hasUI) {
-			ctx.ui.notify(`Voice: using ${providerName} provider (Ctrl+Alt+V to record)`, "info");
-		}
+		// Show provider quietly in footer — no popup
+		updateStatus(ctx);
 	});
 
 	pi.on("session_shutdown", async (_event, ctx) => {
-		if (state === "recording") {
-			cancelRecording(ctx);
-		}
+		if (state === "recording") cancelRecording(ctx);
 		clearLevelInterval();
 	});
 }
