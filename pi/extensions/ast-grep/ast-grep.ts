@@ -98,9 +98,8 @@ function writeRuleToTempFile(
 ): { dir: string; filePath: string } {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ast-grep-rule-"));
   const filePath = path.join(dir, "rule.yml");
-  const content = `id: ast-grep-search\nlanguage: ${lang}\nrule:\n${
-    indent(ruleBody, 2)
-  }\n`;
+
+  const content = `id: ast-grep-search\nlanguage: ${lang}\nrule:\n${indent(ruleBody, 2)}\n`;
   fs.writeFileSync(filePath, content, "utf-8");
   return { dir, filePath };
 }
@@ -433,7 +432,9 @@ export default function (pi: ExtensionAPI) {
     promptGuidelines: [
       "Prefer ast_grep over grep when searching for code structures (functions, classes, imports, type definitions, API calls)",
       "Use grep instead for plain text, comments, config values, or non-code files",
-      "ast_grep pattern mode: use $VAR for single-node wildcards, $$$ for spread/rest",
+      "Start with pattern mode for simple searches (e.g. pattern: 'async function $NAME($$$) { $$$ }'). Only use rule mode when you need relational logic (has/inside/precedes/follows)",
+      "If unsure about tree-sitter node kinds for rule mode, use inspect mode first to discover the correct kind names",
+      "Always include stopBy: end in has/inside rules to search the full subtree",
     ],
     parameters: Type.Object({
       mode: Type.Union(
