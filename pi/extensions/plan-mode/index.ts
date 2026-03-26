@@ -50,9 +50,9 @@ export default function planModeExtension(pi: ExtensionAPI): void {
 		// Footer status
 		if (executionMode && todoItems.length > 0) {
 			const completed = todoItems.filter((t) => t.completed).length;
-			ctx.ui.setStatus("plan-mode", ctx.ui.theme.fg("accent", `📋 ${completed}/${todoItems.length}`));
+			ctx.ui.setStatus("plan-mode", ctx.ui.theme.fg("accent", `plan:${completed}/${todoItems.length}`));
 		} else if (planModeEnabled) {
-			ctx.ui.setStatus("plan-mode", ctx.ui.theme.fg("warning", "⏸ plan"));
+			ctx.ui.setStatus("plan-mode", ctx.ui.theme.fg("warning", "● plan"));
 		} else {
 			ctx.ui.setStatus("plan-mode", undefined);
 		}

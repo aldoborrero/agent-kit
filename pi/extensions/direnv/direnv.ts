@@ -42,12 +42,13 @@ export default function (pi: ExtensionAPI) {
       }
 
       if (ctx.hasUI && loadedCount > 0) {
-        ctx.ui.setStatus("direnv", ctx.ui.theme.fg("success", "direnv ✓"));
+        // Success is the expected state — clear any previous error
+        ctx.ui.setStatus("direnv", undefined);
       }
     } catch {
       // direnv not available or .envrc blocked/failed - show error indicator
       if (ctx.hasUI) {
-        ctx.ui.setStatus("direnv", ctx.ui.theme.fg("error", "direnv ✗"));
+        ctx.ui.setStatus("direnv", ctx.ui.theme.fg("error", "● direnv"));
       }
     }
   }

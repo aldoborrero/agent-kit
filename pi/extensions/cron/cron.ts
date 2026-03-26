@@ -251,7 +251,7 @@ export default function cronLoopExtension(pi: ExtensionAPI) {
 
 		ctx.ui.setStatus(
 			"cron",
-			ctx.ui.theme.fg("success", "●") + ` ${tasks.size} cron`,
+			ctx.ui.theme.fg("success", `cron:${tasks.size}`),
 		);
 	}
 

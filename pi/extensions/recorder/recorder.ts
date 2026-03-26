@@ -605,17 +605,11 @@ export default function recorderExtension(pi: ExtensionAPI) {
         [state.sessionId, sessionFile, ctx.cwd, Date.now(), modelProvider, modelId],
       );
 
-      if (ctx.hasUI) {
-        ctx.ui.setStatus(EXT_NAME, ctx.ui.theme.fg("success", "●") + ` ${EXT_NAME}`);
-      }
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       console.error(LOG_PREFIX, "session_start error:", msg);
       if (ctx.hasUI) {
-        ctx.ui.setStatus(EXT_NAME, ctx.ui.theme.fg("error", "●") + ` ${EXT_NAME}`);
-        if (msg.includes("better-sqlite3")) {
-          ctx.ui.notify(`${EXT_NAME}: ${msg}`, "error");
-        }
+        ctx.ui.notify(`${EXT_NAME}: ${msg}`, "error");
       }
     }
   });

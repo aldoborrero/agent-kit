@@ -86,11 +86,12 @@ export default function (pi: ExtensionAPI) {
 
 	function updateStatus(ctx: ExtensionContext): void {
 		if (!ctx.hasUI) return;
+		// Only show when off — on is the expected state
 		ctx.ui.setStatus(
 			"notify",
 			enabled
-				? ctx.ui.theme.fg("muted", "notify:on")
-				: ctx.ui.theme.fg("dim", "notify:off"),
+				? undefined
+				: ctx.ui.theme.fg("warning", "notify:off"),
 		);
 	}
 
