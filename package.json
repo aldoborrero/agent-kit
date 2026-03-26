@@ -37,7 +37,6 @@
       "pi/extensions/direnv",
       "pi/extensions/exit",
       "pi/extensions/git-checkpoint",
-      "pi/extensions/fresh-reads",
       "pi/extensions/github-search",
       "pi/extensions/handoff",
       "pi/extensions/inline-bash",
