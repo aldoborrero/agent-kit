@@ -26,14 +26,14 @@ agent-kit/
 │   └── superpowers/  # 13 advanced workflow skills
 ├── pi/
 │   ├── agents/       # Agent definitions (6 agents)
-│   ├── extensions/   # TypeScript extensions (23 local + 3 npm)
+│   ├── extensions/   # TypeScript extensions (24 local + 3 npm)
 │   └── prompts/      # Workflow templates (4 prompts)
 └── packages/         # Nix packages (pexpect-cli)
 ```
 
 ## Pi Extensions
 
-TypeScript extensions for [pi-coding-agent](https://github.com/badlogic/pi-mono). 23 local extensions + 3 external npm packages.
+TypeScript extensions for [pi-coding-agent](https://github.com/badlogic/pi-mono). 24 local extensions + 3 external npm packages.
 
 ### Code Intelligence
 
@@ -85,14 +85,21 @@ TypeScript extensions for [pi-coding-agent](https://github.com/badlogic/pi-mono)
 | [`pi-mcp-adapter`](https://github.com/nicobailon/pi-mcp-adapter) | Token-efficient MCP (Model Context Protocol) adapter — use any MCP server from pi |
 | [`together-provider`](pi/extensions/together-provider/README.md) | Together AI model provider with 25+ open-source models (Llama, DeepSeek, Qwen, etc.) |
 
-### UI & Notifications
+### Input & Voice
+
+| Extension | Description |
+|-----------|-------------|
+| [`voice`](pi/extensions/voice/README.md) | Toggle-to-record speech-to-text — Groq, OpenAI, or local Whisper daemon. `Ctrl+Alt+V` or `/voice` |
+| [`inline-bash`](pi/extensions/inline-bash/README.md) | Expand `!{command}` patterns in prompts — e.g. `The branch is !{git branch --show-current}` |
+| [`questionnaire`](pi/extensions/questionnaire/README.md) | Structured multi-question UI with options and free-text input |
+
+### UI & Commands
 
 | Extension | Description |
 |-----------|-------------|
 | [`notify`](pi/extensions/notify/README.md) | Desktop notifications when the agent finishes (Ghostty, iTerm2, Kitty, WezTerm, WSL) |
-| [`inline-bash`](pi/extensions/inline-bash/README.md) | Expand `!{command}` patterns in prompts — e.g. `The branch is !{git branch --show-current}` |
 | [`footer`](pi/extensions/footer/README.md) | Custom footer with git branch, context usage, and extension statuses |
-| [`questionnaire`](pi/extensions/questionnaire/README.md) | Structured multi-question UI with options and free-text input |
+| [`exit`](pi/extensions/exit/exit.ts) | `/exit` command — alias for `/quit` |
 | [`git-commit-context`](pi/extensions/git-commit-context/README.md) | `/commit` command with git status/log context injection |
 
 ## Skills

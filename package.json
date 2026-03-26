@@ -29,9 +29,13 @@
     "@sinclair/typebox": "*"
   },
   "pi": {
+    "themes": [
+      "pi/extensions/themes"
+    ],
     "extensions": [
       "pi/extensions/ast-grep",
       "pi/extensions/direnv",
+      "pi/extensions/exit",
       "pi/extensions/git-checkpoint",
       "pi/extensions/fresh-reads",
       "pi/extensions/github-search",
@@ -43,11 +47,12 @@
       "pi/extensions/notify",
       "pi/extensions/plan-mode",
       "pi/extensions/questionnaire",
-      "pi/extensions/quit",
       "pi/extensions/recorder",
       "pi/extensions/sandbox",
+      "pi/extensions/skill-namespaces",
       "pi/extensions/subagent",
       "pi/extensions/together-provider",
+      "pi/extensions/voice",
       "pi/extensions/context",
       "pi/extensions/cron",
       "pi-lsp-extension",
