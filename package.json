@@ -16,6 +16,11 @@
     "type": "git",
     "url": "https://github.com/aldoborrero/agent-kit.git"
   },
+  "dependencies": {
+    "pi-lsp-extension": "github:samfoy/pi-lsp-extension",
+    "pi-mcp-adapter": "github:nicobailon/pi-mcp-adapter",
+    "pi-interactive-shell": "github:nicobailon/pi-interactive-shell"
+  },
   "peerDependencies": {
     "@mariozechner/pi-ai": "*",
     "@mariozechner/pi-agent-core": "*",
@@ -27,14 +32,27 @@
     "extensions": [
       "pi/extensions/ast-grep",
       "pi/extensions/direnv",
+      "pi/extensions/git-checkpoint",
+      "pi/extensions/fresh-reads",
       "pi/extensions/github-search",
+      "pi/extensions/handoff",
+      "pi/extensions/inline-bash",
       "pi/extensions/jina",
-      "pi/extensions/kagi-search",
-      "pi/extensions/pexpect-cli",
+      "pi/extensions/loop",
+      "pi/extensions/multi-edit",
+      "pi/extensions/notify",
+      "pi/extensions/plan-mode",
       "pi/extensions/questionnaire",
+      "pi/extensions/quit",
       "pi/extensions/recorder",
+      "pi/extensions/sandbox",
       "pi/extensions/subagent",
-      "pi/extensions/together-provider"
+      "pi/extensions/together-provider",
+      "pi/extensions/context",
+      "pi/extensions/cron",
+      "pi-lsp-extension",
+      "pi-mcp-adapter",
+      "pi-interactive-shell"
     ]
   }
 }
