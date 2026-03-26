@@ -15,9 +15,9 @@ agent-kit/
 │   └── superpowers/  # 13 workflow skills (brainstorming, TDD, debugging, etc.)
 ├── pi/
 │   ├── agents/       # Agent definitions (scout, planner, worker, reviewer, debugger, brainstormer)
-│   ├── extensions/   # TypeScript extensions (10 tools)
+│   ├── extensions/   # TypeScript extensions (20 tools, 3 external npm packages)
 │   └── prompts/      # Workflow templates (brainstorm, debug, full-cycle, review)
-└── packages/         # Nix packages (pexpect-cli, pi-sync)
+└── packages/         # Nix packages (pexpect-cli)
 ```
 
 ## Key Conventions
@@ -49,7 +49,6 @@ agent-kit/
 ```bash
 nix develop          # Enter dev shell
 nix fmt              # Format code
-nix build .#pi-sync  # Build packages
 ```
 
 ### Testing Extensions
@@ -57,9 +56,9 @@ nix build .#pi-sync  # Build packages
 pi -e ./pi/extensions/example/example.ts
 ```
 
-### Deploying to pi-coding-agent
+### Installing to pi-coding-agent
 ```bash
-pi-sync all          # Sync everything to ~/.pi/agent/
+pi install git:github.com/aldoborrero/agent-kit
 ```
 
 ## Writing New Components
