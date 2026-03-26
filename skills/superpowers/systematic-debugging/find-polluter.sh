@@ -39,7 +39,7 @@ for TEST_FILE in $TEST_FILES; do
   echo "[$COUNT/$TOTAL] Testing: $TEST_FILE"
 
   # Run the test
-  npm test "$TEST_FILE" > /dev/null 2>&1 || true
+  npm test "$TEST_FILE" >/dev/null 2>&1 || true
 
   # Check if pollution appeared
   if [ -e "$POLLUTION_CHECK" ]; then

@@ -1,6 +1,5 @@
 {
   pkgs,
-  perSystem,
 }:
 pkgs.mkShellNoCC {
   packages = [
