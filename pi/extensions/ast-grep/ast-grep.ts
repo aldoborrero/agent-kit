@@ -72,8 +72,8 @@ function indent(text: string, spaces: number): string {
 }
 
 /** Append shared args (--lang, --globs, --context, paths) to an args array. */
-function addSharedArgs(args: string[], params: AstGrepParams): void {
-  if (params.lang) {
+function addSharedArgs(args: string[], params: AstGrepParams, options?: { skipLang?: boolean }): void {
+  if (params.lang && !options?.skipLang) {
     args.push("--lang", params.lang);
   }
   if (params.globs) {
@@ -594,7 +594,7 @@ export default function (pi: ExtensionAPI) {
               filePath,
               "--json=compact",
             ];
-            addSharedArgs(args, p);
+            addSharedArgs(args, p, { skipLang: true });
 
             onUpdate?.({
               content: [
