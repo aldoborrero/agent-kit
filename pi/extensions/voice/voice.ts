@@ -1,0 +1,347 @@
+/**
+ * Voice Extension — speech-to-text input for the coding agent.
+ *
+ * Records audio via microphone, transcribes with a cloud STT provider
+ * (Groq / OpenAI) or a local daemon, and pastes or sends the result.
+ *
+ * Usage:
+ *   Ctrl+Alt+V  — toggle recording
+ *   /voice            — toggle recording
+ *   /voice cancel     — cancel active recording
+ *   /voice provider <groq|openai|daemon>
+ *   /voice lang <code>
+ *   /voice mode <paste|send>
+ *   /voice status     — show current configuration
+ */
+
+import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
+import { Key } from "@mariozechner/pi-tui";
+import { SpawnRecorder, DaemonRecorder, type Recorder } from "./recorder.js";
+import { createProvider, detectProvider, type STTProvider, type ProviderName } from "./providers.js";
+
+type State = "idle" | "recording" | "transcribing";
+
+const LEVEL_BARS = "▁▃▅▇";
+const LEVEL_METER_INTERVAL_MS = 100;
+const MIN_AUDIO_LENGTH = 16000;
+
+export default function voiceExtension(pi: ExtensionAPI) {
+	let state: State = "idle";
+	let provider: STTProvider | null = null;
+	let providerName: ProviderName | null = null;
+	let recorder: Recorder | null = null;
+	let levelInterval: ReturnType<typeof setInterval> | null = null;
+	let hints = "";
+
+	const config = {
+		lang: process.env.VOICE_LANG ?? "en",
+		mode: (process.env.VOICE_MODE ?? "paste") as "paste" | "send",
+	};
+
+	// ─── Provider / Recorder init ───────────────────────────────────
+
+	function initProvider(name?: ProviderName): void {
+		if (name) {
+			provider = createProvider(name);
+			providerName = name;
+		} else {
+			const detected = detectProvider();
+			if (detected) {
+				provider = detected.provider;
+				providerName = detected.name;
+			} else {
+				provider = null;
+				providerName = null;
+			}
+		}
+
+		if (providerName === "daemon") {
+			recorder = new DaemonRecorder();
+		} else {
+			recorder = new SpawnRecorder();
+		}
+	}
+
+	// ─── Status / UI helpers ────────────────────────────────────────
+
+	function renderLevel(level: number): string {
+		const clamped = Math.max(0, Math.min(1, level));
+		const idx = Math.min(
+			Math.floor(clamped * LEVEL_BARS.length),
+			LEVEL_BARS.length - 1,
+		);
+		return LEVEL_BARS.slice(0, idx + 1);
+	}
+
+	function updateStatus(ctx: ExtensionContext): void {
+		if (!ctx.hasUI) return;
+
+		switch (state) {
+			case "idle":
+				ctx.ui.setStatus("voice", undefined);
+				break;
+			case "recording": {
+				const bars = recorder?.hasLevel()
+					? " " + renderLevel(recorder.getLevel())
+					: "";
+				ctx.ui.setStatus(
+					"voice",
+					ctx.ui.theme.fg("success", "●") + " REC" + bars,
+				);
+				break;
+			}
+			case "transcribing":
+				ctx.ui.setStatus(
+					"voice",
+					ctx.ui.theme.fg("warning", "●") + " transcribing…",
+				);
+				break;
+		}
+	}
+
+	function showError(ctx: ExtensionContext, msg: string): void {
+		if (!ctx.hasUI) return;
+		ctx.ui.setStatus("voice", ctx.ui.theme.fg("error", "●") + " " + msg);
+		ctx.ui.notify(msg, "error");
+		setTimeout(() => {
+			if (state === "idle") {
+				ctx.ui.setStatus("voice", undefined);
+			}
+		}, 3000);
+	}
+
+	function clearLevelInterval(): void {
+		if (levelInterval) {
+			clearInterval(levelInterval);
+			levelInterval = null;
+		}
+	}
+
+	// ─── Recording lifecycle ────────────────────────────────────────
+
+	function startRecording(ctx: ExtensionContext): void {
+		if (!provider || !recorder) {
+			showError(ctx, "No STT provider configured. Set GROQ_API_KEY, OPENAI_API_KEY, or VOICE_DAEMON_URL.");
+			return;
+		}
+
+		state = "recording";
+		updateStatus(ctx);
+
+		try {
+			recorder.start(() => {
+				// onAutoStop callback — silence or max duration reached
+				stopAndTranscribe(ctx);
+			});
+		} catch (err) {
+			state = "idle";
+			showError(ctx, `Recording failed: ${err instanceof Error ? err.message : String(err)}`);
+			return;
+		}
+
+		if (recorder.hasLevel()) {
+			levelInterval = setInterval(() => {
+				updateStatus(ctx);
+			}, LEVEL_METER_INTERVAL_MS);
+		}
+	}
+
+	async function stopAndTranscribe(ctx: ExtensionContext): Promise<void> {
+		if (state !== "recording" || !recorder || !provider) return;
+
+		clearLevelInterval();
+		state = "transcribing";
+		updateStatus(ctx);
+
+		try {
+			const result = await recorder.stop();
+
+			// Daemon path: transcription comes back directly
+			if (result.transcription !== undefined) {
+				if (!result.transcription) {
+					showError(ctx, "No speech detected");
+					state = "idle";
+					updateStatus(ctx);
+					return;
+				}
+				outputText(ctx, result.transcription);
+				state = "idle";
+				updateStatus(ctx);
+				return;
+			}
+
+			// Cloud path: we have audio, send to provider
+			if (!result.audio || result.audio.length < MIN_AUDIO_LENGTH) {
+				showError(ctx, "Recording too short");
+				state = "idle";
+				updateStatus(ctx);
+				return;
+			}
+
+			const text = await provider.transcribe(result.audio, config.lang, hints);
+			if (!text) {
+				showError(ctx, "No speech detected");
+				state = "idle";
+				updateStatus(ctx);
+				return;
+			}
+
+			outputText(ctx, text);
+		} catch (err) {
+			showError(ctx, `Transcription failed: ${err instanceof Error ? err.message : String(err)}`);
+		}
+
+		state = "idle";
+		updateStatus(ctx);
+	}
+
+	function cancelRecording(ctx: ExtensionContext): void {
+		clearLevelInterval();
+		if (recorder) {
+			recorder.cancel();
+		}
+		state = "idle";
+		updateStatus(ctx);
+	}
+
+	function outputText(ctx: ExtensionContext, text: string): void {
+		const trimmed = text.trim();
+		if (!trimmed) return;
+
+		if (config.mode === "send") {
+			pi.sendUserMessage(trimmed);
+		} else {
+			if (ctx.hasUI) {
+				ctx.ui.setEditorText(trimmed);
+			}
+		}
+	}
+
+	// ─── Toggle ─────────────────────────────────────────────────────
+
+	function toggle(ctx: ExtensionContext): void {
+		switch (state) {
+			case "idle":
+				startRecording(ctx);
+				break;
+			case "recording":
+				stopAndTranscribe(ctx);
+				break;
+			case "transcribing":
+				// Ignore — already processing
+				break;
+		}
+	}
+
+	// ─── Keyboard shortcut ──────────────────────────────────────────
+
+	pi.registerShortcut(Key.ctrlAlt("v"), (ctx) => {
+		toggle(ctx);
+	});
+
+	// ─── Command ────────────────────────────────────────────────────
+
+	pi.registerCommand("voice", {
+		description: "Voice input — toggle recording or configure (cancel | provider | lang | mode | status)",
+		handler: async (args, ctx) => {
+			const parts = args.trim().split(/\s+/);
+			const sub = parts[0]?.toLowerCase() ?? "";
+
+			if (!sub) {
+				toggle(ctx);
+				return;
+			}
+
+			switch (sub) {
+				case "cancel":
+					cancelRecording(ctx);
+					if (ctx.hasUI) ctx.ui.notify("Recording cancelled", "info");
+					break;
+
+				case "provider": {
+					const name = parts[1]?.toLowerCase();
+					if (name === "groq" || name === "openai" || name === "daemon") {
+						initProvider(name);
+						if (ctx.hasUI) ctx.ui.notify(`Voice provider set to ${name}`, "info");
+					} else {
+						if (ctx.hasUI) ctx.ui.notify("Usage: /voice provider <groq|openai|daemon>", "error");
+					}
+					break;
+				}
+
+				case "lang": {
+					const code = parts[1];
+					if (code) {
+						config.lang = code;
+						if (ctx.hasUI) ctx.ui.notify(`Voice language set to ${code}`, "info");
+					} else {
+						if (ctx.hasUI) ctx.ui.notify(`Current language: ${config.lang}`, "info");
+					}
+					break;
+				}
+
+				case "mode": {
+					const mode = parts[1]?.toLowerCase();
+					if (mode === "paste" || mode === "send") {
+						config.mode = mode;
+						if (ctx.hasUI) ctx.ui.notify(`Voice mode set to ${mode}`, "info");
+					} else {
+						if (ctx.hasUI) ctx.ui.notify("Usage: /voice mode <paste|send>", "error");
+					}
+					break;
+				}
+
+				case "status": {
+					const info = [
+						`Provider: ${providerName ?? "none"}`,
+						`Language: ${config.lang}`,
+						`Mode: ${config.mode}`,
+						`Recorder: ${recorder?.constructor.name ?? "none"}`,
+						`State: ${state}`,
+					].join("\n");
+					if (ctx.hasUI) ctx.ui.notify(info, "info");
+					break;
+				}
+
+				default:
+					if (ctx.hasUI) {
+						ctx.ui.notify(
+							"Usage: /voice [cancel | provider <name> | lang <code> | mode <paste|send> | status]",
+							"error",
+						);
+					}
+					break;
+			}
+		},
+	});
+
+	// ─── Events ─────────────────────────────────────────────────────
+
+	pi.on("session_start", async (_event, ctx) => {
+		// Build hints from project context
+		try {
+			const nameResult = await pi.exec("bash", ["-c", "cat package.json 2>/dev/null | grep '\"name\"' | head -1 | sed 's/.*\"name\".*\"\\(.*\\)\".*/\\1/'"]);
+			const branchResult = await pi.exec("bash", ["-c", "git rev-parse --abbrev-ref HEAD 2>/dev/null"]);
+			const parts: string[] = [];
+			if (nameResult.stdout?.trim()) parts.push(nameResult.stdout.trim());
+			if (branchResult.stdout?.trim()) parts.push(branchResult.stdout.trim());
+			if (parts.length > 0) hints = parts.join(" ");
+		} catch {
+			// Non-critical — hints are optional
+		}
+
+		// Auto-detect provider
+		initProvider();
+
+		if (providerName && ctx.hasUI) {
+			ctx.ui.notify(`Voice: using ${providerName} provider (Ctrl+Alt+V to record)`, "info");
+		}
+	});
+
+	pi.on("session_shutdown", async (_event, ctx) => {
+		if (state === "recording") {
+			cancelRecording(ctx);
+		}
+		clearLevelInterval();
+	});
+}
