@@ -43,7 +43,6 @@
       "pi/extensions/inline-bash",
       "pi/extensions/jina",
       "pi/extensions/loop",
-      "pi/extensions/multi-edit",
       "pi/extensions/notify",
       "pi/extensions/plan-mode",
       "pi/extensions/questionnaire",

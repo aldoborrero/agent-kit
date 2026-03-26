@@ -40,7 +40,6 @@ TypeScript extensions for [pi-coding-agent](https://github.com/badlogic/pi-mono)
 | Extension | Description |
 |-----------|-------------|
 | [`ast-grep`](pi/extensions/ast-grep/README.md) | Structural code search using AST patterns with pattern, rule, and inspect modes |
-| [`multi-edit`](pi/extensions/multi-edit/README.md) | Batch edits across multiple files in one tool call with preflight validation and Codex-style patch support |
 | [`pi-lsp-extension`](https://github.com/samfoy/pi-lsp-extension) | LSP integration — diagnostics, hover, go-to-definition, references, symbols, rename, completions |
 | [`fresh-reads`](pi/extensions/fresh-reads/README.md) | Blocks stale edits — if a file changed externally since last read, forces re-read first |
 
