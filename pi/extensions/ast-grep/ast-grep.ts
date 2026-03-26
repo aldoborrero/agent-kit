@@ -429,6 +429,12 @@ export default function (pi: ExtensionAPI) {
   pi.registerTool({
     name: "ast_grep",
     description: TOOL_DESCRIPTION,
+    promptSnippet: "Search code by structure (AST patterns). Prefer over grep for finding functions, classes, imports, and code patterns.",
+    promptGuidelines: [
+      "Prefer ast_grep over grep when searching for code structures (functions, classes, imports, type definitions, API calls)",
+      "Use grep instead for plain text, comments, config values, or non-code files",
+      "ast_grep pattern mode: use $VAR for single-node wildcards, $$$ for spread/rest",
+    ],
     parameters: Type.Object({
       mode: Type.Union(
         [
@@ -496,7 +502,7 @@ export default function (pi: ExtensionAPI) {
       ),
     }),
 
-    async execute(_toolCallId, params, onUpdate, ctx, _signal) {
+    async execute(_toolCallId, params, _signal, onUpdate, ctx) {
       const p = params as AstGrepParams;
 
       try {

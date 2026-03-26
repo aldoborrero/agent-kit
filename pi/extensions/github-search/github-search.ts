@@ -140,7 +140,7 @@ Search syntax: https://docs.github.com/search-github/searching-on-github/searchi
 				}),
 			),
 		}),
-		async execute(_toolCallId, params, onUpdate, _ctx, _signal) {
+		async execute(_toolCallId, params, _signal, _onUpdate, _ctx) {
 			try {
 				// Build gh arguments
 				const args: string[] = [params.query];

@@ -9,7 +9,7 @@ export default function (pi: ExtensionAPI) {
     parameters: Type.Object({
       url: Type.String({ description: "The URL to fetch" }),
     }),
-    async execute(toolCallId, params, onUpdate, ctx, signal) {
+    async execute(_toolCallId, params, signal, _onUpdate, _ctx) {
       const jinaUrl = `https://r.jina.ai/${params.url}`;
 
       const response = await fetch(jinaUrl, {
