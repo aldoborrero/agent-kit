@@ -7,3 +7,27 @@ result-*
 node_modules
 bun.lockb
 .bun
+
+# secrets & certs
+*.pem
+*.key
+*.crt
+.env
+.env.*
+
+# personal dotfiles
+.bash_profile
+.bashrc
+.zshrc
+.zprofile
+.profile
+.gitconfig
+.ripgreprc
+
+# editor & IDE
+.idea/
+.vscode/
+
+# tools
+.claude/
+.mcp.json
