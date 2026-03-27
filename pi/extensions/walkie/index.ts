@@ -116,15 +116,28 @@ function isConfigured(c: Partial<WalkieConfig>): c is WalkieConfig {
 
 // ── Bot command menu ──────────────────────────────────────────────────────────
 
+/** Default (English) command descriptions — registered as the global fallback */
 const BOT_COMMANDS: tg.BotCommand[] = [
-  { command: "abort",   description: "Stop the current agent run" },
-  { command: "compact", description: "Compress context to free space" },
-  { command: "think",   description: "Cycle thinking: none → low → high" },
-  { command: "stream",  description: "Toggle live draft streaming" },
+  { command: "abort",   description: "Stop the current agent run immediately" },
+  { command: "status",  description: "Show agent state, model, and context usage" },
+  { command: "compact", description: "Compress context to free up space" },
+  { command: "new",     description: "New session (queued if agent is active)" },
+  { command: "think",   description: "Cycle thinking level: none → low → high" },
+  { command: "stream",  description: "Toggle live draft preview on/off" },
   { command: "on",      description: "Enable walkie notifications" },
   { command: "off",     description: "Disable walkie notifications" },
-  { command: "status",  description: "Show agent state, model, and context" },
-  { command: "new",     description: "Queue a new session after current run" },
+];
+
+/** Spanish translations — shown when the user's Telegram language is set to Spanish */
+const BOT_COMMANDS_ES: tg.BotCommand[] = [
+  { command: "abort",   description: "Detener la ejecución del agente inmediatamente" },
+  { command: "status",  description: "Ver estado del agente, modelo y contexto" },
+  { command: "compact", description: "Comprimir el contexto para liberar espacio" },
+  { command: "new",     description: "Nueva sesión (en cola si el agente está activo)" },
+  { command: "think",   description: "Cambiar nivel de razonamiento: ninguno → bajo → alto" },
+  { command: "stream",  description: "Activar/desactivar vista previa en tiempo real" },
+  { command: "on",      description: "Activar notificaciones de walkie" },
+  { command: "off",     description: "Desactivar notificaciones de walkie" },
 ];
 
 // ── Extension ─────────────────────────────────────────────────────────────────
@@ -298,6 +311,7 @@ export default function walkieExtension(pi: ExtensionAPI) {
 
       // Register bot commands so Telegram shows the /command menu
       await tg.setMyCommands(config.botToken!, BOT_COMMANDS).catch(() => {});
+      await tg.setMyCommands(config.botToken!, BOT_COMMANDS_ES, "es").catch(() => {});
 
       await tg
         .sendMessage(
@@ -545,6 +559,7 @@ export default function walkieExtension(pi: ExtensionAPI) {
     // Ensure bot command menu is registered (idempotent, best-effort)
     if (isConfigured(config)) {
       await tg.setMyCommands(config.botToken, BOT_COMMANDS).catch(() => {});
+      await tg.setMyCommands(config.botToken, BOT_COMMANDS_ES, "es").catch(() => {});
     }
 
     // Only notify on a genuinely fresh session (no prior entries)

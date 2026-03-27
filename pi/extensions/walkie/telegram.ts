@@ -239,8 +239,12 @@ export async function setMessageReaction(
 export async function setMyCommands(
   token: string,
   commands: BotCommand[],
+  languageCode?: string,
 ): Promise<true> {
-  return call<true>(token, "setMyCommands", { commands });
+  return call<true>(token, "setMyCommands", {
+    commands,
+    ...(languageCode ? { language_code: languageCode } : {}),
+  });
 }
 
 export async function downloadFile(
