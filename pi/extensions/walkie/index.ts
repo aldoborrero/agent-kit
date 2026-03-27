@@ -58,6 +58,8 @@ interface WalkieConfig {
   enabled: boolean;
   /** Use sendMessageDraft for live streaming preview (default: true — available to all bots since Bot API 9.5) */
   streaming: boolean;
+  /** Unix timestamp (ms) until which sendMessageDraft is suppressed — set when peer returns TEXTDRAFT_PEER_INVALID */
+  draftSuppressedUntil?: number;
 }
 
 function loadConfigSync(): Partial<WalkieConfig> {
@@ -242,7 +244,9 @@ export default function walkieExtension(pi: ExtensionAPI) {
           if (draftState) suppressDraftUntil(draftState, backoffMs);
         } else if (err.description.includes("TEXTDRAFT_PEER_INVALID")) {
           // This peer does not support drafts (e.g. group chat, channel).
-          // Disable drafts for the rest of this run to avoid repeated failures.
+          // Persist suppression for 24h so future sessions don't retry.
+          config.draftSuppressedUntil = Date.now() + 24 * 60 * 60 * 1000;
+          await persistConfig(config).catch(() => {});
           draftState = null;
         }
       }
@@ -597,6 +601,9 @@ export default function walkieExtension(pi: ExtensionAPI) {
     }, 4_000);
 
     if (!config.streaming) return;
+
+    // Skip draft creation if this peer previously returned TEXTDRAFT_PEER_INVALID
+    if (config.draftSuppressedUntil && Date.now() < config.draftSuppressedUntil) return;
 
     // Create fresh draft state for this run
     draftIdCounter++;
