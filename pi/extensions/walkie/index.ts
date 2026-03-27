@@ -83,10 +83,41 @@ function loadConfigSync(): Partial<WalkieConfig> {
   }
 }
 
-async function persistConfig(config: Partial<WalkieConfig>): Promise<void> {
+/** Load project-local overrides from <cwd>/.pi/walkie.json */
+function loadProjectConfigSync(cwd: string): Partial<WalkieConfig> {
   try {
-    await mkdir(join(homedir(), ".pi"), { recursive: true });
-    await writeFile(CONFIG_PATH, JSON.stringify(config, null, 2) + "\n", "utf8");
+    const path = join(cwd, PI_DIR_NAME, "walkie.json");
+    return JSON.parse(readFileSync(path, "utf8")) as Partial<WalkieConfig>;
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * Persist global config to ~/.pi/walkie.json.
+ * topicId and topicName are project-specific — use persistProjectConfig() for those.
+ */
+async function persistConfig(config: Partial<WalkieConfig>): Promise<void> {
+  const { topicId, topicName, ...globalFields } = config;
+  try {
+    await mkdir(PI_DIR, { recursive: true });
+    await writeFile(CONFIG_PATH, JSON.stringify(globalFields, null, 2) + "\n", "utf8");
+  } catch {
+    // non-critical
+  }
+}
+
+/** Persist project-local overrides (topicId, topicName) to <cwd>/.pi/walkie.json */
+async function persistProjectConfig(cwd: string, partial: Pick<Partial<WalkieConfig>, "topicId" | "topicName">): Promise<void> {
+  try {
+    const dir = join(cwd, PI_DIR_NAME);
+    const path = join(dir, "walkie.json");
+    await mkdir(dir, { recursive: true });
+    // Merge with existing project config to avoid clobbering other fields
+    let existing: Partial<WalkieConfig> = {};
+    try { existing = JSON.parse(readFileSync(path, "utf8")) as Partial<WalkieConfig>; } catch { /* ok */ }
+    const merged = { ...existing, ...partial };
+    await writeFile(path, JSON.stringify(merged, null, 2) + "\n", "utf8");
   } catch {
     // non-critical
   }
@@ -797,7 +828,10 @@ export default function walkieExtension(pi: ExtensionAPI) {
 
   pi.on("session_start", async (_event, ctx) => {
     lastCtx = ctx;
-    config = { enabled: true, streaming: true, ...loadConfigSync() };
+    // Merge: global defaults ← global config ← project-local overrides
+    // Project-local (~/<cwd>/.pi/walkie.json) holds topicId/topicName so each
+    // pi instance in a different project has its own topic without collision.
+    config = { enabled: true, streaming: true, ...loadConfigSync(), ...loadProjectConfigSync(ctx.cwd) };
 
     updateStatus(ctx);
 
@@ -1067,6 +1101,9 @@ export default function walkieExtension(pi: ExtensionAPI) {
           setupMode = true;
           config.enabled = true;
           await persistConfig(config);
+          if (config.topicId !== undefined) {
+            await persistProjectConfig(ctx.cwd, { topicId: config.topicId, topicName: config.topicName });
+          }
           updateStatus(ctx);
 
           // Restart polling with the new token
@@ -1120,6 +1157,7 @@ export default function walkieExtension(pi: ExtensionAPI) {
             `Token   : ${config.botToken ? config.botToken.slice(0, 12) + "…" : "not set"}`,
             `Chat ID : ${config.chatId ?? "not set"}`,
             `User ID : ${config.allowedUserId ?? "not set"}`,
+            `Topic   : ${config.topicId ? `${config.topicName ?? "unnamed"} (#${config.topicId})` : "none"}`,
             `Enabled : ${config.enabled ? "yes" : "no"}`,
             `Stream  : ${config.streaming ? "yes" : "no"}`,
             `Polling : ${pollingAbort ? "active" : "stopped"}`,
@@ -1142,6 +1180,7 @@ export default function walkieExtension(pi: ExtensionAPI) {
             config.topicId = message_thread_id;
             config.topicName = topicName;
             await persistConfig(config);
+            await persistProjectConfig(ctx.cwd, { topicId: message_thread_id, topicName });
             ctx.ui.notify(
               `✅ Forum topic created: "${topicName}" (id: ${message_thread_id})\nAll messages now routed to this topic.`,
               "info",
