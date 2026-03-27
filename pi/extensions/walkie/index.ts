@@ -377,6 +377,31 @@ export default function walkieExtension(pi: ExtensionAPI) {
       return;
     }
 
+    if (text.startsWith("/stream")) {
+      config.streaming = !config.streaming;
+      await persistConfig(config);
+      if (lastCtx) updateStatus(lastCtx);
+      await sendPlain(`📡 Streaming ${config.streaming ? "enabled ✅" : "disabled ❌"}`).catch(() => {});
+      return;
+    }
+
+    if (text.startsWith("/off")) {
+      // Send confirmation before disabling — sendPlain no-ops when enabled=false
+      await sendPlain("🔕 Notifications disabled. Send /on to re-enable.").catch(() => {});
+      config.enabled = false;
+      await persistConfig(config);
+      if (lastCtx) updateStatus(lastCtx);
+      return;
+    }
+
+    if (text.startsWith("/on")) {
+      config.enabled = true;
+      await persistConfig(config);
+      if (lastCtx) updateStatus(lastCtx);
+      await sendPlain("🔔 Notifications enabled.").catch(() => {});
+      return;
+    }
+
     // ── Regular text message → inject into pi ────────────────────────────
     if (text) {
       // React 👀 immediately to acknowledge receipt
@@ -430,9 +455,8 @@ export default function walkieExtension(pi: ExtensionAPI) {
     updateStatus(ctx);
 
     if (!config.botToken) return;
-    if (!config.enabled && !setupMode) return;
-
-    // Start polling (polling loop guards against double-start internally)
+    // Start polling even when disabled — keeps /on working from Telegram
+    // without needing to restart pi. Outbound sends are gated on config.enabled.
     startPolling().catch(() => {});
 
     // Ensure bot command menu is registered (idempotent, best-effort)
