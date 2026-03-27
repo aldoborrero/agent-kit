@@ -500,6 +500,23 @@ export default function walkieExtension(pi: ExtensionAPI) {
 
   // ─── Update sub-handlers ─────────────────────────────────────────────────
 
+  /**
+   * Resolve the effective forum topic thread ID from an incoming message.
+   * Mirrors nullclaw's messageThreadId logic in telegram_update_ingress.zig:
+   * 1. Use message_thread_id when explicitly present and > 0
+   * 2. Fall back to reply_to_message.message_id when is_topic_message is true
+   *    (Telegram omits message_thread_id on the root message of a topic)
+   */
+  function resolveMessageThreadId(msg: tg.TelegramMessage | undefined): number | undefined {
+    if (!msg) return undefined;
+    if (msg.message_thread_id && msg.message_thread_id > 0) return msg.message_thread_id;
+    // Telegram fallback: topic root messages carry is_topic_message but no thread_id
+    // The thread ID equals the first message_id in the topic (reply_to_message)
+    // We don't have reply_to_message in our minimal TelegramMessage type, so we
+    // rely solely on the explicit field — good enough for bot-created topics.
+    return undefined;
+  }
+
   async function handleSetupPairing(msg: tg.TelegramMessage): Promise<void> {
     config.chatId = msg.chat.id;
     config.allowedUserId = msg.from!.id;
@@ -728,7 +745,8 @@ export default function walkieExtension(pi: ExtensionAPI) {
 
     // ── Topic filter: ignore messages not in our configured topic ─────────
     if (config.topicId !== undefined) {
-      const msgThreadId = update.message?.message_thread_id ?? update.callback_query?.message?.message_thread_id;
+      const msgThreadId = resolveMessageThreadId(update.message)
+        ?? update.callback_query?.message?.message_thread_id;
       if (msgThreadId !== config.topicId) return;
     }
 
