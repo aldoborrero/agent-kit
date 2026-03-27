@@ -555,17 +555,23 @@ export default function walkieExtension(pi: ExtensionAPI) {
       switch (sub) {
         // ── Setup: enter pairing mode ─────────────────────────────────────
         case "setup": {
-          if (!config.botToken) {
-            const token = await ctx.ui.input(
-              "Bot Token",
-              "Enter your Telegram bot token from @BotFather",
-            );
-            if (!token) {
+          {
+            const hint = config.botToken
+              ? `Current: ${config.botToken.slice(0, 12)}… — leave blank to keep, or enter a new token`
+              : "Enter your Telegram bot token from @BotFather";
+            const token = await ctx.ui.input("Bot Token", hint);
+            if (token === null) {
               ctx.ui.notify("Setup cancelled", "info");
               return;
             }
-            config.botToken = token.trim();
-            await persistConfig(config);
+            const trimmed = token.trim();
+            if (trimmed) {
+              config.botToken = trimmed;
+              await persistConfig(config);
+            } else if (!config.botToken) {
+              ctx.ui.notify("No bot token provided — setup cancelled.", "warning");
+              return;
+            }
           }
 
           setupMode = true;
