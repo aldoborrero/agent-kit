@@ -137,7 +137,7 @@ export default function walkieExtension(pi: ExtensionAPI) {
   }
 
   /** Send text to Telegram as HTML (converted from markdown), falling back to plain */
-  async function send(text: string): Promise<void> {
+  async function send(text: string, extraOptions?: Partial<tg.SendMessageOptions>): Promise<void> {
     if (!isConfigured(config) || !config.enabled) return;
     const { botToken, chatId } = config;
 
@@ -146,13 +146,13 @@ export default function walkieExtension(pi: ExtensionAPI) {
 
     for (const chunk of chunks) {
       try {
-        await tg.sendMessage(botToken, chatId, chunk, { parse_mode: "HTML" });
+        await tg.sendMessage(botToken, chatId, chunk, { parse_mode: "HTML", ...extraOptions });
       } catch (err) {
         // HTML parse failure (400) → abandon formatted send, retry ALL as plain
         if (err instanceof tg.TelegramError && err.statusCode === 400) {
           const plainChunks = chunkText(text);
           for (const plain of plainChunks) {
-            await tg.sendMessage(botToken, chatId, plain).catch(() => {});
+            await tg.sendMessage(botToken, chatId, plain, extraOptions).catch(() => {});
           }
           return;
         }
@@ -502,7 +502,10 @@ export default function walkieExtension(pi: ExtensionAPI) {
     };
 
     const body = buildFinalMessage(lastAssistantText, stats);
-    await send(body).catch(() => {});
+    const replyOptions = runTriggerMessageId !== null
+      ? { reply_parameters: { message_id: runTriggerMessageId } }
+      : undefined;
+    await send(body, replyOptions).catch(() => {});
 
     // React ✅ on the message that triggered this run
     if (isConfigured(config) && runTriggerMessageId !== null) {

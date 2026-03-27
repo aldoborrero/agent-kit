@@ -73,6 +73,8 @@ export interface SendMessageOptions {
   reply_markup?: InlineKeyboardMarkup;
   disable_notification?: boolean;
   disable_web_page_preview?: boolean;
+  /** Reply to a specific message in the chat (creates a thread-like view) */
+  reply_parameters?: { message_id: number };
 }
 
 // ── Error ────────────────────────────────────────────────────────────────────
