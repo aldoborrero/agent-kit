@@ -30,8 +30,9 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { basename, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
+import { getAgentDir } from "@mariozechner/pi-coding-agent";
 import * as tg from "./telegram.js";
 import { createProvider, detectProvider, type STTProvider } from "../voice/providers.js";
 import {
@@ -53,7 +54,11 @@ import {
 
 // ── Config ────────────────────────────────────────────────────────────────────
 
-const CONFIG_PATH = join(homedir(), ".pi", "walkie.json");
+// ~/.pi/ (or custom via PI_CODING_AGENT_DIR env var — pi derives this from getAgentDir())
+const PI_DIR = dirname(getAgentDir());
+const PI_DIR_NAME = PI_DIR.replace(homedir() + "/", ""); // e.g. ".pi"
+
+const CONFIG_PATH = join(PI_DIR, "walkie.json");
 
 interface WalkieConfig {
   botToken: string;
@@ -89,7 +94,7 @@ async function persistConfig(config: Partial<WalkieConfig>): Promise<void> {
 
 // ── Voice / STT helpers ───────────────────────────────────────────────────────
 
-const VOICE_CONFIG_PATH = join(homedir(), ".pi", "voice.json");
+const VOICE_CONFIG_PATH = join(PI_DIR, "voice.json");
 
 interface VoiceConfig {
   provider?: string;
