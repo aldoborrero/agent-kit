@@ -28,6 +28,9 @@ export const DRAFT_TRANSPORT_MAX_BYTES = 3_000;
 /** Hard limit per sendMessage call */
 const TELEGRAM_MAX_BYTES = 4_096;
 
+/** Appended to every non-final chunk so the reader knows more is coming */
+export const CONTINUATION_MARKER = "\n\n⬇";
+
 // ── Draft State ───────────────────────────────────────────────────────────────
 
 export interface DraftState {
@@ -333,8 +336,13 @@ export function chunkText(text: string, maxBytes = TELEGRAM_MAX_BYTES): string[]
   if (current) chunks.push(current);
 
   // Post-process: split any chunks that are still too large
-  return chunks.flatMap((chunk) =>
+  const final = chunks.flatMap((chunk) =>
     byteLength(chunk) <= maxBytes ? [chunk] : splitAtLineBoundary(chunk, maxBytes),
+  );
+
+  // Append continuation marker to every non-last chunk so the reader knows more is coming
+  return final.map((chunk, i) =>
+    i < final.length - 1 ? chunk + CONTINUATION_MARKER : chunk,
   );
 }
 
