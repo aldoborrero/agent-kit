@@ -98,17 +98,6 @@ function loadVoiceConfigSync(): VoiceConfig {
   }
 }
 
-/**
- * Return the best available STT provider for transcribing Telegram voice
- * messages. Reads ~/.pi/voice.json for the configured provider and language.
- * Daemon is now fully supported via its POST /transcribe endpoint.
- */
-function getSttProvider(): STTProvider | null {
-  const vc = loadVoiceConfigSync();
-  if (vc.provider) return createProvider(vc.provider as "groq" | "openai" | "daemon");
-  return detectProvider()?.provider ?? null;
-}
-
 function isConfigured(c: Partial<WalkieConfig>): c is WalkieConfig {
   return (
     typeof c.botToken === "string" &&
@@ -350,7 +339,7 @@ export default function walkieExtension(pi: ExtensionAPI) {
         if (err.description.includes("TEXTDRAFT_PEER_INVALID")) {
           // Persist suppression for 24h so future sessions don't retry.
           config.draftSuppressedUntil = Date.now() + 24 * 60 * 60 * 1000;
-          await persistConfig(config).catch(() => {});
+          await persistConfig(config);
           return "peer_invalid";
         }
       }
@@ -847,7 +836,7 @@ export default function walkieExtension(pi: ExtensionAPI) {
     }
 
     // React ✅ on the message that triggered this run
-    if (isConfigured(config) && runTriggerMessageId !== null) {
+    if (isActive(config) && runTriggerMessageId !== null) {
       await tg.setMessageReaction(config.botToken, config.chatId, runTriggerMessageId, "✅").catch(() => {});
     }
     runTriggerMessageId = null;
