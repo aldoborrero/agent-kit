@@ -192,8 +192,8 @@ const BOT_COMMANDS: tg.BotCommand[] = [
   { command: "new",     description: "New session (queued if agent is active)" },
   { command: "think",   description: "Cycle thinking level: none → low → high" },
   { command: "stream",  description: "Toggle live draft preview on/off" },
-  { command: "on",      description: "Enable walkie notifications" },
-  { command: "off",     description: "Disable walkie notifications" },
+  { command: "mute",    description: "Silence walkie notifications" },
+  { command: "unmute",  description: "Resume walkie notifications" },
 ];
 
 /** Spanish translations — shown when the user's Telegram language is set to Spanish */
@@ -204,8 +204,8 @@ const BOT_COMMANDS_ES: tg.BotCommand[] = [
   { command: "new",     description: "Nueva sesión (en cola si el agente está activo)" },
   { command: "think",   description: "Cambiar nivel de razonamiento: ninguno → bajo → alto" },
   { command: "stream",  description: "Activar/desactivar vista previa en tiempo real" },
-  { command: "on",      description: "Activar notificaciones de walkie" },
-  { command: "off",     description: "Desactivar notificaciones de walkie" },
+  { command: "mute",    description: "Silenciar notificaciones de walkie" },
+  { command: "unmute",  description: "Reanudar notificaciones de walkie" },
 ];
 
 // ── Extension ─────────────────────────────────────────────────────────────────
@@ -509,19 +509,19 @@ export default function walkieExtension(pi: ExtensionAPI) {
         await sendPlain(`📡 Streaming ${config.streaming ? "enabled ✅" : "disabled ❌"}`).catch(() => {});
         break;
 
-      case "/off":
+      case "/mute":
         // Send confirmation before disabling — sendPlain no-ops when enabled=false
-        await sendPlain("🔕 Notifications disabled. Send /on to re-enable.").catch(() => {});
+        await sendPlain("🔕 Notifications muted. Send /unmute to resume.").catch(() => {});
         config.enabled = false;
         await persistConfig(config);
         if (lastCtx) updateStatus(lastCtx);
         break;
 
-      case "/on":
+      case "/unmute":
         config.enabled = true;
         await persistConfig(config);
         if (lastCtx) updateStatus(lastCtx);
-        await sendPlain("🔔 Notifications enabled.").catch(() => {});
+        await sendPlain("🔔 Notifications resumed.").catch(() => {});
         break;
     }
   }
