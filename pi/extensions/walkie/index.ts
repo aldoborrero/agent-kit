@@ -1016,6 +1016,34 @@ export default function walkieExtension(pi: ExtensionAPI) {
             }
           }
 
+          // Optional: topic ID for forum-group multi-project routing
+          {
+            const currentTopic = config.topicId ? `Current: ${config.topicId}` : "none";
+            const topicHint = `Forum topic ID (message_thread_id) — leave blank for private chat / no topic. Current: ${currentTopic}`;
+            const topicInput = await ctx.ui.input("Topic ID (optional)", topicHint);
+            if (topicInput !== null) {
+              const tid = parseInt(topicInput.trim(), 10);
+              if (!isNaN(tid) && tid > 0) {
+                config.topicId = tid;
+              } else if (topicInput.trim() === "") {
+                // blank = keep existing or none
+              } else {
+                config.topicId = undefined; // clear if invalid
+              }
+            }
+
+            // Topic name (shown in notifications)
+            if (config.topicId) {
+              const nameHint = config.topicName
+                ? `Current: ${config.topicName} — leave blank to keep`
+                : "Short project name shown in notifications (e.g. agent-kit)";
+              const nameInput = await ctx.ui.input("Project name (optional)", nameHint);
+              if (nameInput !== null && nameInput.trim()) {
+                config.topicName = nameInput.trim();
+              }
+            }
+          }
+
           setupMode = true;
           config.enabled = true;
           await persistConfig(config);
