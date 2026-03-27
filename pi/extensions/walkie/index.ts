@@ -393,6 +393,15 @@ export default function walkieExtension(pi: ExtensionAPI) {
     // Start polling (polling loop guards against double-start internally)
     startPolling().catch(() => {});
 
+    // Ensure bot command menu is registered (idempotent, best-effort)
+    if (isConfigured(config)) {
+      await tg.setMyCommands(config.botToken, [
+        { command: "abort",  description: "Stop the current agent run" },
+        { command: "status", description: "Show agent state and project" },
+        { command: "new",    description: "Queue a new session after current run" },
+      ]).catch(() => {});
+    }
+
     // Only notify on a genuinely fresh session (no prior entries)
     const isFresh = ctx.sessionManager.getEntries().length === 0;
     if (isFresh && isConfigured(config)) {
