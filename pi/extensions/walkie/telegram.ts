@@ -288,14 +288,22 @@ export async function setMessageReaction(
   });
 }
 
+export interface BotCommandScope {
+  type: "default" | "all_private_chats" | "all_group_chats" | "all_chat_administrators" | "chat" | "chat_administrators" | "chat_member";
+  chat_id?: number;
+  user_id?: number;
+}
+
 export async function setMyCommands(
   token: string,
   commands: BotCommand[],
   languageCode?: string,
+  scope?: BotCommandScope,
 ): Promise<true> {
   return call<true>(token, "setMyCommands", {
     commands,
     ...(languageCode ? { language_code: languageCode } : {}),
+    ...(scope ? { scope } : {}),
   });
 }
 

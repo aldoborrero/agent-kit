@@ -498,6 +498,19 @@ export default function walkieExtension(pi: ExtensionAPI) {
     }
   }
 
+  /**
+   * Register the bot command menu. When chatId is known, uses a chat-scoped
+   * registration so commands only appear for this specific group — important
+   * when multiple walkie instances share the same bot token.
+   */
+  async function registerBotCommands(token: string, chatId?: number): Promise<void> {
+    const scope: tg.BotCommandScope | undefined = chatId
+      ? { type: "chat", chat_id: chatId }
+      : undefined;
+    await tg.setMyCommands(token, BOT_COMMANDS, undefined, scope).catch(() => {});
+    await tg.setMyCommands(token, BOT_COMMANDS_ES, "es", scope).catch(() => {});
+  }
+
   // ─── Update sub-handlers ─────────────────────────────────────────────────
 
   /**
@@ -524,8 +537,7 @@ export default function walkieExtension(pi: ExtensionAPI) {
     setupMode = false;
     await persistConfig(config);
     if (lastCtx) updateStatus(lastCtx);
-    await tg.setMyCommands(config.botToken!, BOT_COMMANDS).catch(() => {});
-    await tg.setMyCommands(config.botToken!, BOT_COMMANDS_ES, "es").catch(() => {});
+    await registerBotCommands(config.botToken!, config.chatId);
     await tg.sendMessage(config.botToken!, config.chatId, "✅ Paired! Pi will send updates to this chat.", topicOptions(config)).catch(() => {});
   }
 
@@ -790,8 +802,7 @@ export default function walkieExtension(pi: ExtensionAPI) {
 
     // Ensure bot command menu is registered (idempotent, best-effort)
     if (isConfigured(config)) {
-      await tg.setMyCommands(config.botToken, BOT_COMMANDS).catch(() => {});
-      await tg.setMyCommands(config.botToken, BOT_COMMANDS_ES, "es").catch(() => {});
+      await registerBotCommands(config.botToken, config.chatId);
     }
 
     // Only notify on a genuinely fresh session (no prior entries)
