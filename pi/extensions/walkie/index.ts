@@ -250,6 +250,13 @@ export default function walkieExtension(pi: ExtensionAPI) {
 
       if (lastCtx) updateStatus(lastCtx);
 
+      // Register bot commands so Telegram shows the /command menu
+      await tg.setMyCommands(config.botToken!, [
+        { command: "abort",  description: "Stop the current agent run" },
+        { command: "status", description: "Show agent state and project" },
+        { command: "new",    description: "Queue a new session after current run" },
+      ]).catch(() => {});
+
       await tg
         .sendMessage(
           config.botToken!,

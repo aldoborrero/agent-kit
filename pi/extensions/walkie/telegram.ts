@@ -207,6 +207,18 @@ export async function getFile(
   return call<TelegramFile>(token, "getFile", { file_id: fileId });
 }
 
+export interface BotCommand {
+  command: string;
+  description: string;
+}
+
+export async function setMyCommands(
+  token: string,
+  commands: BotCommand[],
+): Promise<true> {
+  return call<true>(token, "setMyCommands", { commands });
+}
+
 export async function downloadFile(
   token: string,
   filePath: string,
