@@ -391,276 +391,237 @@ export default function walkieExtension(pi: ExtensionAPI) {
     }
   }
 
+  // ─── Update sub-handlers ─────────────────────────────────────────────────
+
+  async function handleSetupPairing(msg: tg.TelegramMessage): Promise<void> {
+    config.chatId = msg.chat.id;
+    config.allowedUserId = msg.from!.id;
+    config.enabled = true;
+    setupMode = false;
+    await persistConfig(config);
+    if (lastCtx) updateStatus(lastCtx);
+    await tg.setMyCommands(config.botToken!, BOT_COMMANDS).catch(() => {});
+    await tg.setMyCommands(config.botToken!, BOT_COMMANDS_ES, "es").catch(() => {});
+    await tg.sendMessage(config.botToken!, config.chatId, "✅ Paired! Pi will send updates to this chat.").catch(() => {});
+  }
+
+  async function handleCallbackQuery(cq: tg.TelegramCallbackQuery): Promise<void> {
+    await tg.answerCallbackQuery(config.botToken, cq.id).catch(() => {});
+
+    if (!cq.data) return;
+
+    if (cq.data.startsWith("wk:")) {
+      const [, rawId, optionId] = cq.data.split(":");
+      const interaction = pendingInteractions.get(Number(rawId));
+      if (!interaction || interaction.expiresAt <= Date.now()) return;
+
+      const opt = interaction.options.find(o => o.id === optionId);
+      if (!opt) return;
+
+      pendingInteractions.delete(Number(rawId));
+      if (interaction.messageId !== null) {
+        await tg.editMessageReplyMarkup(config.botToken, config.chatId, interaction.messageId).catch(() => {});
+      }
+      if (isStreaming) {
+        pi.sendUserMessage(opt.submit_text, { deliverAs: "followUp" });
+      } else {
+        pi.sendUserMessage(opt.submit_text);
+      }
+    } else {
+      pi.events.emit("walkie:callback", { data: cq.data });
+    }
+  }
+
+  async function handleCommand(text: string): Promise<void> {
+    // Strip @BotName suffix used in group chats (e.g. /abort@MyBot → /abort)
+    const rawCmd = text.split(/\s+/)[0]!;
+    const cmd = rawCmd.includes("@") ? rawCmd.slice(0, rawCmd.indexOf("@")) : rawCmd;
+
+    switch (cmd) {
+      case "/abort":
+        await tg.sendMessage(config.botToken, config.chatId, "⛔ Abort signal sent.").catch(() => {});
+        if (isStreaming) {
+          pi.sendUserMessage("Stop what you're doing and summarize what happened.", { deliverAs: "steer" });
+        }
+        lastCtx?.abort();
+        break;
+
+      case "/status": {
+        const projectName = lastCtx ? basename(lastCtx.cwd) : "unknown";
+        const modelName = lastCtx?.model?.name ?? "unknown";
+        const usage = lastCtx?.getContextUsage();
+        const usageStr = usage?.percent != null
+          ? `${Math.round(usage.percent)}% · ${(usage.tokens ?? 0).toLocaleString()} tokens`
+          : "unknown";
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const thinkingLevel = (pi as any).getThinkingLevel?.() ?? "unknown";
+        const html = [
+          `📍 <b>Pi Status</b>`,
+          `Project: <code>${escapeHTML(projectName)}</code>`,
+          `Agent: ${isStreaming ? "🔄 running" : "⏸ idle"}`,
+          `Model: <code>${escapeHTML(String(modelName))}</code>`,
+          `Context: ${usageStr}`,
+          `Thinking: ${thinkingLevel}`,
+          `Streaming: ${config.streaming ? "✅" : "❌"}`,
+          `Walkie: ${config.enabled ? "✅" : "❌"}`,
+        ].join("\n");
+        await tg.sendMessage(config.botToken, config.chatId, html, { parse_mode: "HTML" }).catch(() => {});
+        break;
+      }
+
+      case "/think": {
+        const levels = ["none", "low", "high"] as const;
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const current = String((pi as any).getThinkingLevel?.() ?? "none");
+        const idx = levels.indexOf(current as typeof levels[number]);
+        const next = levels[(idx + 1) % levels.length]!;
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        (pi as any).setThinkingLevel?.(next);
+        await sendPlain(`🧠 Thinking: ${current} → ${next}`).catch(() => {});
+        break;
+      }
+
+      case "/compact":
+        if (isStreaming) {
+          await sendPlain("⚠️ Cannot compact while agent is running.").catch(() => {});
+          break;
+        }
+        await sendPlain("🗜 Compacting context...").catch(() => {});
+        lastCtx?.compact({
+          onComplete: async () => { await sendPlain("✅ Context compacted.").catch(() => {}); },
+          onError:    async (err) => { await sendPlain(`❌ Compaction failed: ${err.message}`).catch(() => {}); },
+        });
+        break;
+
+      case "/new":
+        if (isStreaming) {
+          pi.sendUserMessage("When you're done, please start a new session.", { deliverAs: "followUp" });
+          await sendPlain("📋 Queued: new session after current task.").catch(() => {});
+        } else {
+          await sendPlain("⚠️ Use /new in the terminal to start a new session.").catch(() => {});
+        }
+        break;
+
+      case "/stream":
+        config.streaming = !config.streaming;
+        await persistConfig(config);
+        if (lastCtx) updateStatus(lastCtx);
+        await sendPlain(`📡 Streaming ${config.streaming ? "enabled ✅" : "disabled ❌"}`).catch(() => {});
+        break;
+
+      case "/off":
+        // Send confirmation before disabling — sendPlain no-ops when enabled=false
+        await sendPlain("🔕 Notifications disabled. Send /on to re-enable.").catch(() => {});
+        config.enabled = false;
+        await persistConfig(config);
+        if (lastCtx) updateStatus(lastCtx);
+        break;
+
+      case "/on":
+        config.enabled = true;
+        await persistConfig(config);
+        if (lastCtx) updateStatus(lastCtx);
+        await sendPlain("🔔 Notifications enabled.").catch(() => {});
+        break;
+    }
+  }
+
+  /** Inject a text message into pi and acknowledge with 👀 */
+  function injectText(text: string, messageId: number): void {
+    tg.setMessageReaction(config.botToken, config.chatId, messageId, "👀").catch(() => {});
+    if (isStreaming) {
+      pi.sendUserMessage(text, { deliverAs: "followUp" });
+    } else {
+      runTriggerMessageId = messageId;
+      pi.sendUserMessage(text);
+    }
+  }
+
+  async function handlePhoto(msg: tg.TelegramMessage): Promise<void> {
+    await tg.setMessageReaction(config.botToken, config.chatId, msg.message_id, "👀").catch(() => {});
+    const largest = msg.photo![msg.photo!.length - 1]!;
+    try {
+      const fileInfo = await tg.getFile(config.botToken, largest.file_id);
+      if (!fileInfo.file_path) return;
+      const buf = await tg.downloadFile(config.botToken, fileInfo.file_path);
+      const caption = (msg.caption ?? msg.text ?? "Image from Telegram").trim();
+      const content = [
+        { type: "text"  as const, text: caption },
+        { type: "image" as const, data: buf.toString("base64"), mimeType: "image/jpeg" },
+      ];
+      if (isStreaming) {
+        pi.sendUserMessage(content, { deliverAs: "followUp" });
+      } else {
+        runTriggerMessageId = msg.message_id;
+        pi.sendUserMessage(content);
+      }
+    } catch {
+      // Image injection is best-effort
+    }
+  }
+
+  async function handleVoice(msg: tg.TelegramMessage): Promise<void> {
+    await tg.setMessageReaction(config.botToken, config.chatId, msg.message_id, "👀").catch(() => {});
+    const stt = getSttProvider();
+    if (!stt) {
+      await sendPlain("⚠️ No STT provider for voice transcription.\nSet GROQ_API_KEY or OPENAI_API_KEY and run /voice config.").catch(() => {});
+      return;
+    }
+    try {
+      const fileInfo = await tg.getFile(config.botToken, msg.voice!.file_id);
+      if (!fileInfo.file_path) return;
+      const buf = await tg.downloadFile(config.botToken, fileInfo.file_path);
+      const lang = loadVoiceConfigSync().lang ?? "en";
+      const transcription = await stt.transcribe(buf, lang, "", { mimeType: "audio/ogg", filename: "voice.ogg" });
+      if (!transcription.trim()) {
+        await sendPlain("⚠️ No speech detected.").catch(() => {});
+        return;
+      }
+      await sendPlain(`🎤 ${transcription.trim()}`).catch(() => {});
+      await tg.setMessageReaction(config.botToken, config.chatId, msg.message_id, "✅").catch(() => {});
+      if (isStreaming) {
+        pi.sendUserMessage(transcription.trim(), { deliverAs: "followUp" });
+      } else {
+        runTriggerMessageId = msg.message_id;
+        pi.sendUserMessage(transcription.trim());
+      }
+    } catch (err) {
+      await sendPlain(`❌ Transcription failed: ${err instanceof Error ? err.message : String(err)}`).catch(() => {});
+    }
+  }
+
   async function handleUpdate(update: tg.TelegramUpdate): Promise<void> {
     // ── Setup mode: claim the first real user ────────────────────────────
     if (setupMode && update.message?.from && !update.message.from.is_bot) {
-      config.chatId = update.message.chat.id;
-      config.allowedUserId = update.message.from.id;
-      config.enabled = true;
-      setupMode = false;
-      await persistConfig(config);
-
-      if (lastCtx) updateStatus(lastCtx);
-
-      // Register bot commands so Telegram shows the /command menu
-      await tg.setMyCommands(config.botToken!, BOT_COMMANDS).catch(() => {});
-      await tg.setMyCommands(config.botToken!, BOT_COMMANDS_ES, "es").catch(() => {});
-
-      await tg
-        .sendMessage(
-          config.botToken!,
-          config.chatId,
-          "✅ Paired! Pi will send updates to this chat.",
-        )
-        .catch(() => {});
+      await handleSetupPairing(update.message);
       return;
     }
 
     // ── Security: only accept from allowedUserId ─────────────────────────
     if (!isConfigured(config)) return;
-
-    const senderId =
-      update.message?.from?.id ?? update.callback_query?.from.id;
+    const senderId = update.message?.from?.id ?? update.callback_query?.from.id;
     if (senderId !== config.allowedUserId) return;
 
-    // ── Inline button press ───────────────────────────────────────────────
+    // ── Inline button ─────────────────────────────────────────────────────
     if (update.callback_query) {
-      const cq = update.callback_query;
-      // Dismiss the loading spinner immediately
-      await tg.answerCallbackQuery(config.botToken, cq.id).catch(() => {});
-
-      if (cq.data?.startsWith("wk:")) {
-        // walkie choice button — resolve the submit_text and inject it
-        const parts = cq.data.split(":");
-        const interactionId = Number(parts[1]);
-        const optionId = parts[2];
-        const interaction = pendingInteractions.get(interactionId);
-
-        if (interaction && interaction.expiresAt > Date.now()) {
-          const opt = interaction.options.find(o => o.id === optionId);
-          if (opt) {
-            pendingInteractions.delete(interactionId);
-            // Clear the inline keyboard so it can't be tapped again
-            if (interaction.messageId !== null) {
-              await tg.editMessageReplyMarkup(config.botToken, config.chatId, interaction.messageId).catch(() => {});
-            }
-            // Inject the submit_text as a user message
-            if (isStreaming) {
-              pi.sendUserMessage(opt.submit_text, { deliverAs: "followUp" });
-            } else {
-              pi.sendUserMessage(opt.submit_text);
-            }
-          }
-        }
-      } else if (cq.data) {
-        // Emit for other extensions to handle (future approval flow)
-        pi.events.emit("walkie:callback", { data: cq.data });
-      }
+      await handleCallbackQuery(update.callback_query);
       return;
     }
 
-    // ── Text message ──────────────────────────────────────────────────────
     if (!update.message) return;
     const msg = update.message;
     const text = msg.text?.trim() ?? "";
 
-    // Bot commands
-    if (text.startsWith("/abort")) {
-      await tg
-        .sendMessage(config.botToken, config.chatId, "⛔ Abort signal sent.")
-        .catch(() => {});
-
-      if (isStreaming) {
-        // Steer with a stop request — agent sees it after its current turn
-        pi.sendUserMessage("Stop what you're doing and summarize what happened.", {
-          deliverAs: "steer",
-        });
-      }
-      // Also call ctx.abort() if we have a context
-      lastCtx?.abort();
+    // ── Commands ──────────────────────────────────────────────────────────
+    if (text.startsWith("/")) {
+      await handleCommand(text);
       return;
     }
 
-    if (text.startsWith("/status")) {
-      const projectName = lastCtx ? basename(lastCtx.cwd) : "unknown";
-      const modelName = lastCtx?.model?.name ?? "unknown";
-      const usage = lastCtx?.getContextUsage();
-      const usageStr = usage?.percent != null
-        ? `${Math.round(usage.percent)}% · ${(usage.tokens ?? 0).toLocaleString()} tokens`
-        : "unknown";
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const thinkingLevel = (pi as any).getThinkingLevel?.() ?? "unknown";
-      const html = [
-        `📍 <b>Pi Status</b>`,
-        `Project: <code>${escapeHTML(projectName)}</code>`,
-        `Agent: ${isStreaming ? "🔄 running" : "⏸ idle"}`,
-        `Model: <code>${escapeHTML(String(modelName))}</code>`,
-        `Context: ${usageStr}`,
-        `Thinking: ${thinkingLevel}`,
-        `Streaming: ${config.streaming ? "✅" : "❌"}`,
-        `Walkie: ${config.enabled ? "✅" : "❌"}`,
-      ].join("\n");
-      await tg.sendMessage(config.botToken, config.chatId, html, { parse_mode: "HTML" }).catch(() => {});
-      return;
-    }
-
-    if (text.startsWith("/think")) {
-      const levels = ["none", "low", "high"] as const;
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const current = String((pi as any).getThinkingLevel?.() ?? "none");
-      const idx = levels.indexOf(current as typeof levels[number]);
-      const next = levels[(idx + 1) % levels.length]!;
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      (pi as any).setThinkingLevel?.(next);
-      await sendPlain(`🧠 Thinking: ${current} → ${next}`).catch(() => {});
-      return;
-    }
-
-    if (text.startsWith("/compact")) {
-      if (isStreaming) {
-        await sendPlain("⚠️ Cannot compact while agent is running.").catch(() => {});
-        return;
-      }
-      await sendPlain("🗜 Compacting context...").catch(() => {});
-      lastCtx?.compact({
-        onComplete: async () => {
-          await sendPlain("✅ Context compacted.").catch(() => {});
-        },
-        onError: async (err) => {
-          await sendPlain(`❌ Compaction failed: ${err.message}`).catch(() => {});
-        },
-      });
-      return;
-    }
-
-    if (text.startsWith("/new")) {
-      if (isStreaming) {
-        pi.sendUserMessage(
-          "When you're done, please start a new session.",
-          { deliverAs: "followUp" },
-        );
-        await sendPlain("📋 Queued: new session after current task.").catch(() => {});
-      } else {
-        await sendPlain("⚠️ Use /new in the terminal to start a new session.").catch(() => {});
-      }
-      return;
-    }
-
-    if (text.startsWith("/stream")) {
-      config.streaming = !config.streaming;
-      await persistConfig(config);
-      if (lastCtx) updateStatus(lastCtx);
-      await sendPlain(`📡 Streaming ${config.streaming ? "enabled ✅" : "disabled ❌"}`).catch(() => {});
-      return;
-    }
-
-    if (text.startsWith("/off")) {
-      // Send confirmation before disabling — sendPlain no-ops when enabled=false
-      await sendPlain("🔕 Notifications disabled. Send /on to re-enable.").catch(() => {});
-      config.enabled = false;
-      await persistConfig(config);
-      if (lastCtx) updateStatus(lastCtx);
-      return;
-    }
-
-    if (text.startsWith("/on")) {
-      config.enabled = true;
-      await persistConfig(config);
-      if (lastCtx) updateStatus(lastCtx);
-      await sendPlain("🔔 Notifications enabled.").catch(() => {});
-      return;
-    }
-
-    // ── Regular text message → inject into pi ────────────────────────────
-    if (text) {
-      // React 👀 immediately to acknowledge receipt
-      await tg.setMessageReaction(config.botToken, config.chatId, msg.message_id, "👀").catch(() => {});
-
-      if (isStreaming) {
-        pi.sendUserMessage(text, { deliverAs: "followUp" });
-      } else {
-        // This message triggers a new run — record its ID for ✅ on completion
-        runTriggerMessageId = msg.message_id;
-        pi.sendUserMessage(text);
-      }
-    }
-
-    // ── Photo → download + inject as image content ────────────────────────
-    if (msg.photo && msg.photo.length > 0) {
-      await tg.setMessageReaction(config.botToken, config.chatId, msg.message_id, "👀").catch(() => {});
-
-      const largest = msg.photo[msg.photo.length - 1]!;
-      try {
-        const fileInfo = await tg.getFile(config.botToken, largest.file_id);
-        if (fileInfo.file_path) {
-          const buf = await tg.downloadFile(config.botToken, fileInfo.file_path);
-          const caption = (msg.caption ?? msg.text ?? "Image from Telegram").trim();
-
-          const content = [
-            { type: "text" as const, text: caption },
-            {
-              type: "image" as const,
-              data: buf.toString("base64"),
-              mimeType: "image/jpeg",
-            },
-          ];
-
-          if (isStreaming) {
-            pi.sendUserMessage(content, { deliverAs: "followUp" });
-          } else {
-            runTriggerMessageId = msg.message_id;
-            pi.sendUserMessage(content);
-          }
-        }
-      } catch {
-        // Image injection is best-effort
-      }
-    }
-
-    // ── Voice message → transcribe via STT + inject as text ──────────────
-    if (msg.voice) {
-      await tg.setMessageReaction(config.botToken, config.chatId, msg.message_id, "👀").catch(() => {});
-
-      const stt = getSttProvider();
-      if (!stt) {
-        await sendPlain(
-          "⚠️ No STT provider for voice transcription.\nSet GROQ_API_KEY or OPENAI_API_KEY and run /voice config.",
-        ).catch(() => {});
-        return;
-      }
-
-      try {
-        const fileInfo = await tg.getFile(config.botToken, msg.voice.file_id);
-        if (!fileInfo.file_path) return;
-
-        const buf = await tg.downloadFile(config.botToken, fileInfo.file_path);
-        const lang = loadVoiceConfigSync().lang ?? "en";
-        const transcription = await stt.transcribe(buf, lang, "", {
-          mimeType: "audio/ogg",
-          filename: "voice.ogg",
-        });
-
-        if (!transcription.trim()) {
-          await sendPlain("⚠️ No speech detected.").catch(() => {});
-          return;
-        }
-
-        // Echo transcription back so the user can see what was understood
-        await sendPlain(`🎤 ${transcription.trim()}`).catch(() => {});
-        await tg.setMessageReaction(config.botToken, config.chatId, msg.message_id, "✅").catch(() => {});
-
-        if (isStreaming) {
-          pi.sendUserMessage(transcription.trim(), { deliverAs: "followUp" });
-        } else {
-          runTriggerMessageId = msg.message_id;
-          pi.sendUserMessage(transcription.trim());
-        }
-      } catch (err) {
-        await sendPlain(
-          `❌ Transcription failed: ${err instanceof Error ? err.message : String(err)}`,
-        ).catch(() => {});
-      }
-    }
+    // ── Content → inject into pi ──────────────────────────────────────────
+    if (text)          injectText(text, msg.message_id);
+    if (msg.photo?.length) await handlePhoto(msg);
+    if (msg.voice)         await handleVoice(msg);
   }
 
   // ─── Pi Events ────────────────────────────────────────────────────────────
