@@ -118,6 +118,12 @@ function isConfigured(c: Partial<WalkieConfig>): c is WalkieConfig {
   );
 }
 
+/** True when walkie is fully configured AND enabled — the common guard. */
+function isActive(c: Partial<WalkieConfig>): c is WalkieConfig {
+  if (!isConfigured(c)) return false;
+  return c.enabled;
+}
+
 // ── Interactive choices ───────────────────────────────────────────────────────
 
 interface ChoiceOption {
@@ -277,7 +283,7 @@ export default function walkieExtension(pi: ExtensionAPI) {
 
   /** Send text to Telegram as HTML (converted from markdown), falling back to plain */
   async function send(text: string, extraOptions?: Partial<tg.SendMessageOptions>): Promise<void> {
-    if (!isConfigured(config) || !config.enabled) return;
+    if (!isActive(config)) return;
     const { botToken, chatId } = config;
 
     const formatted = formatForTelegram(text);
@@ -302,7 +308,7 @@ export default function walkieExtension(pi: ExtensionAPI) {
 
   /** Send plain text with no parse mode */
   async function sendPlain(text: string): Promise<void> {
-    if (!isConfigured(config) || !config.enabled) return;
+    if (!isActive(config)) return;
     const { botToken, chatId } = config;
     const chunks = chunkText(text);
     for (const chunk of chunks) {
@@ -314,7 +320,7 @@ export default function walkieExtension(pi: ExtensionAPI) {
 
   /** Flush a DraftFlush to sendMessageDraft. Returns a result the caller acts on. */
   async function flushDraft(flush: DraftFlush): Promise<FlushResult> {
-    if (!isConfigured(config) || !config.enabled || !config.streaming) return "skipped";
+    if (!isActive(config) || !config.streaming) return "skipped";
     if (!draftState || flush.draftId !== draftState.draftId) return "stale";
 
     try {
@@ -661,13 +667,13 @@ export default function walkieExtension(pi: ExtensionAPI) {
 
   pi.on("session_switch", async (_event, ctx) => {
     lastCtx = ctx;
-    if (!isConfigured(config) || !config.enabled) return;
+    if (!isActive(config)) return;
     const projectName = basename(ctx.cwd);
     await sendPlain(`📂 Session switched · ${projectName}`).catch(() => {});
   });
 
   pi.on("before_agent_start", async (_event, _ctx) => {
-    if (!isConfigured(config) || !config.enabled) return;
+    if (!isActive(config)) return;
     return { systemPrompt: CHOICES_SYSTEM_PROMPT };
   });
 
@@ -681,11 +687,11 @@ export default function walkieExtension(pi: ExtensionAPI) {
     // runTriggerMessageId is intentionally NOT reset here — it is set by
     // handleUpdate before agent_start fires, so we must preserve it.
 
-    if (!isConfigured(config) || !config.enabled) return;
+    if (!isActive(config)) return;
 
     // Keep-alive typing indicator every 4s until the first draft flush is visible
     typingTimer = setInterval(async () => {
-      if (!isConfigured(config) || !config.enabled) return;
+      if (!isActive(config)) return;
       if (draftState?.lastFlushLen) return; // draft is already visible, stop typing indicator
       await tg.sendChatAction(config.botToken!, config.chatId!, "typing").catch(() => {});
     }, 4_000);
@@ -725,7 +731,7 @@ export default function walkieExtension(pi: ExtensionAPI) {
     // Switched from thinking to text output — reset phase label
     agentPhase = "Processing request...";
 
-    if (!config.streaming || !draftState || !isConfigured(config) || !config.enabled) return;
+    if (!isActive(config) || !config.streaming || !draftState) return;
     const flush = appendDraftChunk(draftState, ae.delta as string, Date.now());
     if (flush) await flushDraftAndHandleResult(flush);
   });
@@ -753,7 +759,7 @@ export default function walkieExtension(pi: ExtensionAPI) {
     stopTimers();
     draftState = null;
 
-    if (!isConfigured(config) || !config.enabled) return;
+    if (!isActive(config)) return;
 
     const elapsed = agentStartTime !== null ? Date.now() - agentStartTime : 0;
     agentStartTime = null;
@@ -837,7 +843,7 @@ export default function walkieExtension(pi: ExtensionAPI) {
   pi.on("session_shutdown", async (_event, _ctx) => {
     stopPolling();
     stopTimers();
-    if (isConfigured(config) && config.enabled) {
+    if (isActive(config)) {
       await sendPlain("🔴 Pi session ended").catch(() => {});
     }
   });
