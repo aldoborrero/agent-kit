@@ -221,7 +221,7 @@ const BOT_COMMANDS_ES: tg.BotCommand[] = [
  * Usage:
  *   await tg.sendMessage(token, chatId, text, { ...topicOptions(config), parse_mode: "HTML" });
  */
-function topicOptions(config: WalkieConfig): Partial<tg.SendMessageOptions> {
+function topicOptions(config: Partial<WalkieConfig>): Partial<tg.SendMessageOptions> {
   return config.topicId ? { message_thread_id: config.topicId } : {};
 }
 
@@ -380,14 +380,14 @@ export default function walkieExtension(pi: ExtensionAPI) {
     let lastMessageId: number | null = null;
     for (const chunk of chunks) {
       try {
-        const msg = await tg.sendMessage(botToken, chatId, chunk, { parse_mode: "HTML", ...extraOptions });
+        const msg = await tg.sendMessage(botToken, chatId, chunk, { ...topicOptions(config), parse_mode: "HTML", ...extraOptions });
         lastMessageId = msg.message_id;
       } catch (err) {
         // HTML parse failure (400) → abandon formatted send, retry ALL as plain
         if (err instanceof tg.TelegramError && err.statusCode === 400) {
           const plainChunks = chunkText(text);
           for (const plain of plainChunks) {
-            const msg = await tg.sendMessage(botToken, chatId, plain, extraOptions).catch(() => null);
+            const msg = await tg.sendMessage(botToken, chatId, plain, { ...topicOptions(config), ...extraOptions }).catch(() => null);
             if (msg) lastMessageId = msg.message_id;
           }
           return lastMessageId;
@@ -404,7 +404,7 @@ export default function walkieExtension(pi: ExtensionAPI) {
     const { botToken, chatId } = config;
     const chunks = chunkText(text);
     for (const chunk of chunks) {
-      await tg.sendMessage(botToken, chatId, chunk).catch(() => {});
+      await tg.sendMessage(botToken, chatId, chunk, topicOptions(config)).catch(() => {});
     }
   }
 
@@ -416,7 +416,7 @@ export default function walkieExtension(pi: ExtensionAPI) {
     if (!draftState || flush.draftId !== draftState.draftId) return "stale";
 
     try {
-      await tg.sendMessageDraft(config.botToken, config.chatId, flush.draftId, flush.text);
+      await tg.sendMessageDraft(config.botToken, config.chatId, flush.draftId, flush.text, { messageThreadId: config.topicId });
       return "ok";
     } catch (err) {
       if (err instanceof tg.TelegramError) {
@@ -509,7 +509,7 @@ export default function walkieExtension(pi: ExtensionAPI) {
     if (lastCtx) updateStatus(lastCtx);
     await tg.setMyCommands(config.botToken!, BOT_COMMANDS).catch(() => {});
     await tg.setMyCommands(config.botToken!, BOT_COMMANDS_ES, "es").catch(() => {});
-    await tg.sendMessage(config.botToken!, config.chatId, "✅ Paired! Pi will send updates to this chat.").catch(() => {});
+    await tg.sendMessage(config.botToken!, config.chatId, "✅ Paired! Pi will send updates to this chat.", topicOptions(config)).catch(() => {});
   }
 
   async function handleCallbackQuery(cq: tg.TelegramCallbackQuery): Promise<void> {
@@ -551,7 +551,7 @@ export default function walkieExtension(pi: ExtensionAPI) {
     switch (cmd) {
       case "/abort":
         cancelPendingText(config.chatId);
-        await tg.sendMessage(config.botToken, config.chatId, "⛔ Abort signal sent.").catch(() => {});
+        await tg.sendMessage(config.botToken, config.chatId, "⛔ Abort signal sent.", topicOptions(config)).catch(() => {});
         if (isStreaming) {
           pi.sendUserMessage("Stop what you're doing and summarize what happened.", { deliverAs: "steer" });
         }
@@ -576,7 +576,7 @@ export default function walkieExtension(pi: ExtensionAPI) {
           `Streaming: ${config.streaming ? "✅" : "❌"}`,
           `Walkie: ${config.enabled ? "✅" : "❌"}`,
         ].join("\n");
-        await tg.sendMessage(config.botToken, config.chatId, html, { parse_mode: "HTML" }).catch(() => {});
+        await tg.sendMessage(config.botToken, config.chatId, html, { ...topicOptions(config), parse_mode: "HTML" }).catch(() => {});
         break;
       }
 
@@ -806,7 +806,7 @@ export default function walkieExtension(pi: ExtensionAPI) {
     typingTimer = setInterval(async () => {
       if (!isActive(config)) return;
       if (draftState?.lastFlushLen) return; // draft is already visible, stop typing indicator
-      await tg.sendChatAction(config.botToken!, config.chatId!, "typing").catch(() => {});
+      await tg.sendChatAction(config.botToken!, config.chatId!, "typing", config.topicId).catch(() => {});
     }, 4_000);
 
     if (!config.streaming) return;
@@ -868,7 +868,7 @@ export default function walkieExtension(pi: ExtensionAPI) {
       ? buildTransportText(`${base}\n\n${agentPhase}`, draftState.startedAt, nowMs)
       : buildHeartbeatText(draftState.startedAt, nowMs, agentPhase);
 
-    await tg.sendMessageDraft(config.botToken, config.chatId, draftState.draftId, displayText)
+    await tg.sendMessageDraft(config.botToken, config.chatId, draftState.draftId, displayText, { messageThreadId: config.topicId })
       .catch(() => {});
   });
 
