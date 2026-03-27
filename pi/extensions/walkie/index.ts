@@ -418,9 +418,16 @@ export default function walkieExtension(pi: ExtensionAPI) {
     }
   }
 
-  /** Call flushDraft and null out draftState if the peer doesn't support drafts. */
+  /**
+   * Call flushDraft and null out draftState if the peer doesn't support drafts.
+   * If a tool is currently running, appends the phase indicator to the draft text
+   * so it remains visible alongside the streaming content.
+   */
   async function flushDraftAndHandleResult(flush: DraftFlush): Promise<void> {
-    const result = await flushDraft(flush).catch(() => "skipped" as FlushResult);
+    const displayFlush = agentPhase.startsWith("🔧")
+      ? { ...flush, text: `${flush.text}\n\n${agentPhase}` }
+      : flush;
+    const result = await flushDraft(displayFlush).catch(() => "skipped" as FlushResult);
     if (result === "peer_invalid") draftState = null;
   }
 
