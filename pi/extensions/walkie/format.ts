@@ -189,7 +189,7 @@ export function buildTransportText(text: string, startedAt: number, nowMs: numbe
 export function buildHeartbeatText(startedAt: number, nowMs: number, label?: string): string {
   const elapsedSec = Math.floor((nowMs - startedAt) / 1000);
   const header = label ?? "Processing request...";
-  return `${header}\nElapsed: ${elapsedSec}s\n\nInterim result is still being prepared.`;
+  return `${header}\nElapsed: ${elapsedSec}s`;
 }
 
 /** Get last maxBytes bytes of text, aligned to a UTF-8 character boundary */
