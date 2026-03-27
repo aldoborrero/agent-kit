@@ -212,6 +212,20 @@ export interface BotCommand {
   description: string;
 }
 
+export async function setMessageReaction(
+  token: string,
+  chatId: number,
+  messageId: number,
+  emoji: string,
+): Promise<true> {
+  return call<true>(token, "setMessageReaction", {
+    chat_id: chatId,
+    message_id: messageId,
+    reaction: [{ type: "emoji", emoji }],
+    is_big: false,
+  });
+}
+
 export async function setMyCommands(
   token: string,
   commands: BotCommand[],

@@ -104,6 +104,8 @@ export default function walkieExtension(pi: ExtensionAPI) {
   let agentStartTime: number | null = null;
   let turnCount = 0;
   let filesChanged = 0;
+  /** message_id of the inbound Telegram message that triggered the current run */
+  let runTriggerMessageId: number | null = null;
 
   // ─── Draft state (only active when config.streaming = true) ─────────────
 
@@ -335,13 +337,16 @@ export default function walkieExtension(pi: ExtensionAPI) {
 
     // ── Regular text message → inject into pi ────────────────────────────
     if (text) {
+      // React 👀 immediately to acknowledge receipt
+      await tg.setMessageReaction(config.botToken, config.chatId, msg.message_id, "👀").catch(() => {});
+
       if (isStreaming) {
         pi.sendUserMessage(text, { deliverAs: "followUp" });
       } else {
+        // This message triggers a new run — record its ID for ✅ on completion
+        runTriggerMessageId = msg.message_id;
         pi.sendUserMessage(text);
       }
-      // Acknowledge with typing indicator
-      await tg.sendChatAction(config.botToken, config.chatId, "typing").catch(() => {});
     }
 
     // ── Photo → download + inject as image content ────────────────────────
@@ -409,6 +414,8 @@ export default function walkieExtension(pi: ExtensionAPI) {
     agentStartTime = Date.now();
     turnCount = 0;
     filesChanged = 0;
+    // runTriggerMessageId is intentionally NOT reset here — it is set by
+    // handleUpdate before agent_start fires, so we must preserve it.
 
     if (!isConfigured(config) || !config.enabled) return;
 
@@ -496,6 +503,12 @@ export default function walkieExtension(pi: ExtensionAPI) {
 
     const body = buildFinalMessage(lastAssistantText, stats);
     await send(body).catch(() => {});
+
+    // React ✅ on the message that triggered this run
+    if (isConfigured(config) && runTriggerMessageId !== null) {
+      await tg.setMessageReaction(config.botToken, config.chatId, runTriggerMessageId, "✅").catch(() => {});
+    }
+    runTriggerMessageId = null;
   });
 
   pi.on("session_shutdown", async (_event, _ctx) => {
