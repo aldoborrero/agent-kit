@@ -274,6 +274,14 @@ export default function walkieExtension(pi: ExtensionAPI) {
     }
   }
 
+  /** Discard any buffered text for this chat without injecting it. */
+  function cancelPendingText(chatId: number): void {
+    const pending = pendingText.get(chatId);
+    if (!pending) return;
+    clearTimeout(pending.timer);
+    pendingText.delete(chatId);
+  }
+
   // ─── Pending inline keyboard interactions ────────────────────────────────
 
   const pendingInteractions = new Map<number, PendingInteraction>();
@@ -485,6 +493,7 @@ export default function walkieExtension(pi: ExtensionAPI) {
 
     switch (cmd) {
       case "/abort":
+        cancelPendingText(config.chatId);
         await tg.sendMessage(config.botToken, config.chatId, "⛔ Abort signal sent.").catch(() => {});
         if (isStreaming) {
           pi.sendUserMessage("Stop what you're doing and summarize what happened.", { deliverAs: "steer" });
