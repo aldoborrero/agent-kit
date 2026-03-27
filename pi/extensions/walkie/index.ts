@@ -970,7 +970,7 @@ export default function walkieExtension(pi: ExtensionAPI) {
     description: "Telegram bridge — toggle, setup, or configure",
 
     getArgumentCompletions: (prefix: string) => {
-      const subs = ["setup", "start", "stop", "status", "stream"];
+      const subs = ["setup", "topic", "start", "stop", "status", "stream"];
       const filtered = subs.filter((s) => s.startsWith(prefix));
       return filtered.length > 0 ? filtered.map((s) => ({ value: s, label: s })) : null;
     },
@@ -1109,9 +1109,35 @@ export default function walkieExtension(pi: ExtensionAPI) {
           break;
         }
 
+        // ── Topic: create a forum topic and save its ID ───────────────────
+        case "topic": {
+          if (!isConfigured(config)) {
+            ctx.ui.notify("Walkie not configured — run /walkie setup first.", "warning");
+            break;
+          }
+          const rawName = args.trim().slice("topic".length).trim();
+          const topicName = rawName || basename(ctx.cwd);
+          try {
+            const { message_thread_id } = await tg.createForumTopic(config.botToken, config.chatId, topicName);
+            config.topicId = message_thread_id;
+            config.topicName = topicName;
+            await persistConfig(config);
+            ctx.ui.notify(
+              `✅ Forum topic created: "${topicName}" (id: ${message_thread_id})\nAll messages now routed to this topic.`,
+              "info",
+            );
+          } catch (err) {
+            ctx.ui.notify(
+              `❌ Could not create topic: ${err instanceof Error ? err.message : String(err)}\nMake sure the bot is admin in a supergroup with Topics enabled.`,
+              "error",
+            );
+          }
+          break;
+        }
+
         default:
           ctx.ui.notify(
-            "Usage: /walkie [setup | start | stop | status | stream]",
+            "Usage: /walkie [setup | topic <name> | start | stop | status | stream]",
             "warning",
           );
       }
