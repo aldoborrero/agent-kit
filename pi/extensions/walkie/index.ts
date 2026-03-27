@@ -116,6 +116,72 @@ function isConfigured(c: Partial<WalkieConfig>): c is WalkieConfig {
   );
 }
 
+// ── Interactive choices ───────────────────────────────────────────────────────
+
+interface ChoiceOption {
+  id: string;
+  label: string;
+  submit_text: string;
+}
+
+interface PendingInteraction {
+  options: ChoiceOption[];
+  messageId: number | null;
+  expiresAt: number;
+}
+
+const INTERACTION_TTL_MS = 15 * 60 * 1000; // 15 minutes
+
+/**
+ * System prompt appended when walkie is active so the agent knows how to
+ * produce Telegram inline keyboard choices.
+ */
+const CHOICES_SYSTEM_PROMPT = `
+## Telegram Interactive Buttons
+
+When communicating via Telegram you may present the user with tappable choice buttons by appending a JSON block at the very end of your response (after all your text):
+
+{"v":1,"options":[
+  {"id":"a","label":"✅ Option A","submit_text":"I choose option A"},
+  {"id":"b","label":"❌ Option B","submit_text":"I choose option B"}
+]}
+
+Rules:
+- 2–4 options only
+- label: shown on the Telegram button (keep it short, ≤ 30 chars)
+- submit_text: injected as the user's next message when the button is tapped
+- Use only for genuine discrete choices, not open-ended questions
+- The JSON block must be the very last thing in your response`.trim();
+
+/**
+ * Extract a choices block from the end of an assistant response.
+ * Returns the visible text (without the JSON) and the parsed options, or
+ * null choices if no valid block is found.
+ */
+function parseChoicesBlock(text: string): { visibleText: string; choices: ChoiceOption[] | null } {
+  const marker = '{"v":1,"options":[';
+  const idx = text.lastIndexOf(marker);
+  if (idx === -1) return { visibleText: text, choices: null };
+  try {
+    const block = JSON.parse(text.slice(idx)) as { v: number; options: ChoiceOption[] };
+    if (!Array.isArray(block.options)) return { visibleText: text, choices: null };
+    if (block.options.length < 2 || block.options.length > 4) return { visibleText: text, choices: null };
+    if (!block.options.every(o => o.id && o.label && o.submit_text)) return { visibleText: text, choices: null };
+    return { visibleText: text.slice(0, idx).trim(), choices: block.options };
+  } catch {
+    return { visibleText: text, choices: null };
+  }
+}
+
+function buildChoicesKeyboard(interactionId: number, options: ChoiceOption[]): tg.InlineKeyboardMarkup {
+  return {
+    inline_keyboard: options.map(opt => [{
+      text: opt.label,
+      callback_data: `wk:${interactionId}:${opt.id}`,
+    }]),
+  };
+}
+
 // ── Bot command menu ──────────────────────────────────────────────────────────
 
 /** Default (English) command descriptions — registered as the global fallback */
@@ -165,6 +231,18 @@ export default function walkieExtension(pi: ExtensionAPI) {
   let runTriggerMessageId: number | null = null;
   /** Current activity label shown in heartbeat messages (thinking / tool / generic) */
   let agentPhase = "Processing request...";
+
+  // ─── Pending inline keyboard interactions ────────────────────────────────
+
+  const pendingInteractions = new Map<number, PendingInteraction>();
+  let interactionSeq = 0;
+
+  function cleanExpiredInteractions(): void {
+    const now = Date.now();
+    for (const [id, interaction] of pendingInteractions) {
+      if (interaction.expiresAt <= now) pendingInteractions.delete(id);
+    }
+  }
 
   // ─── Draft state (only active when config.streaming = true) ─────────────
 
@@ -339,8 +417,32 @@ export default function walkieExtension(pi: ExtensionAPI) {
       const cq = update.callback_query;
       // Dismiss the loading spinner immediately
       await tg.answerCallbackQuery(config.botToken, cq.id).catch(() => {});
-      // Emit for other extensions to handle (future approval flow)
-      if (cq.data) {
+
+      if (cq.data?.startsWith("wk:")) {
+        // walkie choice button — resolve the submit_text and inject it
+        const parts = cq.data.split(":");
+        const interactionId = Number(parts[1]);
+        const optionId = parts[2];
+        const interaction = pendingInteractions.get(interactionId);
+
+        if (interaction && interaction.expiresAt > Date.now()) {
+          const opt = interaction.options.find(o => o.id === optionId);
+          if (opt) {
+            pendingInteractions.delete(interactionId);
+            // Clear the inline keyboard so it can't be tapped again
+            if (interaction.messageId !== null) {
+              await tg.editMessageReplyMarkup(config.botToken, config.chatId, interaction.messageId).catch(() => {});
+            }
+            // Inject the submit_text as a user message
+            if (isStreaming) {
+              pi.sendUserMessage(opt.submit_text, { deliverAs: "followUp" });
+            } else {
+              pi.sendUserMessage(opt.submit_text);
+            }
+          }
+        }
+      } else if (cq.data) {
+        // Emit for other extensions to handle (future approval flow)
         pi.events.emit("walkie:callback", { data: cq.data });
       }
       return;
@@ -584,6 +686,11 @@ export default function walkieExtension(pi: ExtensionAPI) {
     await sendPlain(`📂 Session switched · ${projectName}`).catch(() => {});
   });
 
+  pi.on("before_agent_start", async (_event, _ctx) => {
+    if (!isConfigured(config) || !config.enabled) return;
+    return { systemPrompt: CHOICES_SYSTEM_PROMPT };
+  });
+
   pi.on("agent_start", async (_event, ctx) => {
     lastCtx = ctx;
     isStreaming = true;
@@ -697,11 +804,48 @@ export default function walkieExtension(pi: ExtensionAPI) {
       elapsedMs: elapsed,
     };
 
-    const body = buildFinalMessage(lastAssistantText, stats);
+    cleanExpiredInteractions();
+
+    const { visibleText, choices } = parseChoicesBlock(lastAssistantText);
+    const body = buildFinalMessage(choices ? visibleText : lastAssistantText, stats);
     const replyOptions = runTriggerMessageId !== null
       ? { reply_parameters: { message_id: runTriggerMessageId } }
       : undefined;
-    await send(body, replyOptions).catch(() => {});
+
+    if (choices) {
+      // Send with inline keyboard
+      interactionSeq++;
+      const id = interactionSeq;
+      const keyboard = buildChoicesKeyboard(id, choices);
+      const formatted = formatForTelegram(body);
+
+      let sentMessageId: number | null = null;
+      try {
+        const msg = await tg.sendMessage(config.botToken, config.chatId, formatted, {
+          parse_mode: "HTML",
+          reply_markup: keyboard,
+          ...replyOptions,
+        });
+        sentMessageId = msg.message_id;
+      } catch {
+        // HTML failed → retry plain
+        try {
+          const msg = await tg.sendMessage(config.botToken, config.chatId, body, {
+            reply_markup: keyboard,
+            ...replyOptions,
+          });
+          sentMessageId = msg.message_id;
+        } catch { /* best-effort */ }
+      }
+
+      pendingInteractions.set(id, {
+        options: choices,
+        messageId: sentMessageId,
+        expiresAt: Date.now() + INTERACTION_TTL_MS,
+      });
+    } else {
+      await send(body, replyOptions).catch(() => {});
+    }
 
     // React ✅ on the message that triggered this run
     if (isConfigured(config) && runTriggerMessageId !== null) {

@@ -230,6 +230,18 @@ export async function answerCallbackQuery(
   });
 }
 
+export async function editMessageReplyMarkup(
+  token: string,
+  chatId: number,
+  messageId: number,
+): Promise<true> {
+  return call<true>(token, "editMessageReplyMarkup", {
+    chat_id: chatId,
+    message_id: messageId,
+    reply_markup: { inline_keyboard: [] },
+  });
+}
+
 export async function getFile(
   token: string,
   fileId: string,
