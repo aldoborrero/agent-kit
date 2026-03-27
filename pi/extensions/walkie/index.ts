@@ -31,6 +31,7 @@ import { homedir } from "node:os";
 import { basename, join } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import * as tg from "./telegram.js";
+import { createProvider, detectProvider, type STTProvider } from "../voice/providers.js";
 import {
   DRAFT_HEARTBEAT_INTERVAL_MS,
   type AgentStats,
@@ -74,6 +75,37 @@ async function persistConfig(config: Partial<WalkieConfig>): Promise<void> {
   } catch {
     // non-critical
   }
+}
+
+// ── Voice / STT helpers ───────────────────────────────────────────────────────
+
+const VOICE_CONFIG_PATH = join(homedir(), ".pi", "voice.json");
+
+interface VoiceConfig {
+  provider?: string;
+  lang?: string;
+}
+
+function loadVoiceConfigSync(): VoiceConfig {
+  try {
+    return JSON.parse(readFileSync(VOICE_CONFIG_PATH, "utf8")) as VoiceConfig;
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * Return the best available cloud STT provider for transcribing Telegram voice
+ * messages. Daemon is excluded — it only supports real-time local recording.
+ */
+function getSttProvider(): STTProvider | null {
+  const vc = loadVoiceConfigSync();
+  if (vc.provider && vc.provider !== "daemon") {
+    return createProvider(vc.provider as "groq" | "openai");
+  }
+  const detected = detectProvider();
+  if (detected && detected.name !== "daemon") return detected.provider;
+  return null;
 }
 
 function isConfigured(c: Partial<WalkieConfig>): c is WalkieConfig {
@@ -451,6 +483,51 @@ export default function walkieExtension(pi: ExtensionAPI) {
         }
       } catch {
         // Image injection is best-effort
+      }
+    }
+
+    // ── Voice message → transcribe via STT + inject as text ──────────────
+    if (msg.voice) {
+      await tg.setMessageReaction(config.botToken, config.chatId, msg.message_id, "👀").catch(() => {});
+
+      const stt = getSttProvider();
+      if (!stt) {
+        await sendPlain(
+          "⚠️ No STT provider for voice transcription.\nSet GROQ_API_KEY or OPENAI_API_KEY and run /voice config.",
+        ).catch(() => {});
+        return;
+      }
+
+      try {
+        const fileInfo = await tg.getFile(config.botToken, msg.voice.file_id);
+        if (!fileInfo.file_path) return;
+
+        const buf = await tg.downloadFile(config.botToken, fileInfo.file_path);
+        const lang = loadVoiceConfigSync().lang ?? "en";
+        const transcription = await stt.transcribe(buf, lang, "", {
+          mimeType: "audio/ogg",
+          filename: "voice.ogg",
+        });
+
+        if (!transcription.trim()) {
+          await sendPlain("⚠️ No speech detected.").catch(() => {});
+          return;
+        }
+
+        // Echo transcription back so the user can see what was understood
+        await sendPlain(`🎤 ${transcription.trim()}`).catch(() => {});
+        await tg.setMessageReaction(config.botToken, config.chatId, msg.message_id, "✅").catch(() => {});
+
+        if (isStreaming) {
+          pi.sendUserMessage(transcription.trim(), { deliverAs: "followUp" });
+        } else {
+          runTriggerMessageId = msg.message_id;
+          pi.sendUserMessage(transcription.trim());
+        }
+      } catch (err) {
+        await sendPlain(
+          `❌ Transcription failed: ${err instanceof Error ? err.message : String(err)}`,
+        ).catch(() => {});
       }
     }
   }

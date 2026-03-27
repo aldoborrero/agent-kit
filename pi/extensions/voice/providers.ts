@@ -1,5 +1,12 @@
+export interface TranscribeOptions {
+	/** MIME type of the audio blob (default: "audio/wav") */
+	mimeType?: string;
+	/** Filename sent to the API (default: "recording.wav") */
+	filename?: string;
+}
+
 export interface STTProvider {
-	transcribe(audio: Buffer, lang: string, hints: string): Promise<string>;
+	transcribe(audio: Buffer, lang: string, hints: string, opts?: TranscribeOptions): Promise<string>;
 	isAvailable(): Promise<boolean>;
 }
 
@@ -10,9 +17,11 @@ export class GroqProvider implements STTProvider {
 		this.apiKey = process.env.GROQ_API_KEY ?? "";
 	}
 
-	async transcribe(audio: Buffer, lang: string, hints: string): Promise<string> {
+	async transcribe(audio: Buffer, lang: string, hints: string, opts?: TranscribeOptions): Promise<string> {
+		const mimeType = opts?.mimeType ?? "audio/wav";
+		const filename = opts?.filename ?? "recording.wav";
 		const form = new FormData();
-		form.append("file", new Blob([audio], { type: "audio/wav" }), "recording.wav");
+		form.append("file", new Blob([audio], { type: mimeType }), filename);
 		form.append("model", "whisper-large-v3");
 		form.append("language", lang);
 		form.append("prompt", hints);
@@ -44,9 +53,11 @@ export class OpenAIProvider implements STTProvider {
 		this.apiKey = process.env.OPENAI_API_KEY ?? "";
 	}
 
-	async transcribe(audio: Buffer, lang: string, hints: string): Promise<string> {
+	async transcribe(audio: Buffer, lang: string, hints: string, opts?: TranscribeOptions): Promise<string> {
+		const mimeType = opts?.mimeType ?? "audio/wav";
+		const filename = opts?.filename ?? "recording.wav";
 		const form = new FormData();
-		form.append("file", new Blob([audio], { type: "audio/wav" }), "recording.wav");
+		form.append("file", new Blob([audio], { type: mimeType }), filename);
 		form.append("model", "whisper-1");
 		form.append("language", lang);
 		form.append("prompt", hints);
