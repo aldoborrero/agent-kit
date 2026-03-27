@@ -44,6 +44,10 @@ export interface TelegramMessage {
   caption?: string;
   photo?: TelegramPhotoSize[];
   voice?: TelegramVoice;
+  /** Set for messages in a forum topic */
+  message_thread_id?: number;
+  /** True when the message belongs to a forum topic thread */
+  is_topic_message?: boolean;
 }
 
 export interface TelegramCallbackQuery {
@@ -83,6 +87,8 @@ export interface SendMessageOptions {
   disable_web_page_preview?: boolean;
   /** Reply to a specific message in the chat (creates a thread-like view) */
   reply_parameters?: { message_id: number };
+  /** Send to a specific forum topic thread */
+  message_thread_id?: number;
 }
 
 // ── Error ────────────────────────────────────────────────────────────────────
@@ -198,13 +204,14 @@ export async function sendMessageDraft(
   chatId: number,
   draftId: number,
   text: string,
-  parseMode?: "MarkdownV2" | "HTML",
+  options?: { parseMode?: "MarkdownV2" | "HTML"; messageThreadId?: number },
 ): Promise<true> {
   return call<true>(token, "sendMessageDraft", {
     chat_id: chatId,
     draft_id: draftId,
     text,
-    ...(parseMode ? { parse_mode: parseMode } : {}),
+    ...(options?.parseMode ? { parse_mode: options.parseMode } : {}),
+    ...(options?.messageThreadId ? { message_thread_id: options.messageThreadId } : {}),
   });
 }
 
@@ -212,10 +219,23 @@ export async function sendChatAction(
   token: string,
   chatId: number,
   action: "typing" | "upload_document",
+  messageThreadId?: number,
 ): Promise<true> {
   return call<true>(token, "sendChatAction", {
     chat_id: chatId,
     action,
+    ...(messageThreadId ? { message_thread_id: messageThreadId } : {}),
+  });
+}
+
+export async function createForumTopic(
+  token: string,
+  chatId: number,
+  name: string,
+): Promise<{ message_thread_id: number }> {
+  return call<{ message_thread_id: number }>(token, "createForumTopic", {
+    chat_id: chatId,
+    name,
   });
 }
 
