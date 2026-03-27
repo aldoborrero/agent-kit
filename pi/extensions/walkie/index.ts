@@ -41,6 +41,8 @@ import {
   type DraftState,
   appendDraftChunk,
   buildFinalMessage,
+  buildHeartbeatText,
+  buildTransportText,
   chunkText,
   createDraftState,
   escapeHTML,
@@ -828,6 +830,21 @@ export default function walkieExtension(pi: ExtensionAPI) {
 
   pi.on("tool_call", async (event) => {
     agentPhase = `🔧 ${event.toolName}...`;
+
+    // Immediately push a draft update so the tool name is visible at once,
+    // not just on the next 12s heartbeat tick. We send directly without
+    // modifying the buffer so the tool label doesn't bleed into the final message.
+    if (!draftState || !isActive(config) || !config.streaming) return;
+    if (draftState.suppressUntil > Date.now()) return;
+
+    const nowMs = Date.now();
+    const base = draftState.buffer.trim();
+    const displayText = base
+      ? buildTransportText(`${base}\n\n${agentPhase}`, draftState.startedAt, nowMs)
+      : buildHeartbeatText(draftState.startedAt, nowMs, agentPhase);
+
+    await tg.sendMessageDraft(config.botToken, config.chatId, draftState.draftId, displayText)
+      .catch(() => {});
   });
 
   pi.on("tool_result", async (event) => {
