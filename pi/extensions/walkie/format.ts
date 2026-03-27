@@ -71,10 +71,6 @@ function byteLength(s: string): number {
   return Buffer.byteLength(s, "utf8");
 }
 
-function byteLengthUpTo(s: string, charIndex: number): number {
-  return byteLength(s.slice(0, charIndex));
-}
-
 function hasVisibleText(text: string): boolean {
   return text.trim().length > 0;
 }
@@ -319,12 +315,11 @@ export function chunkText(text: string, maxBytes = TELEGRAM_MAX_BYTES): string[]
     const opens = (para.match(/<pre\b/gi) ?? []).length;
     const closes = (para.match(/<\/pre>/gi) ?? []).length;
     if (opens !== closes) inPre = !inPre;
-    const inFence = inPre;
 
     const separator = current ? "\n\n" : "";
     const candidate = current + separator + para;
 
-    if (byteLength(candidate) > maxBytes && current && !inFence) {
+    if (byteLength(candidate) > maxBytes && current && !inPre) {
       // Would exceed limit and we're not inside a fence: flush current
       chunks.push(current);
       current = para;

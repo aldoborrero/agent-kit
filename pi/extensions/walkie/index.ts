@@ -4,25 +4,27 @@
  * Bridges pi coding agent sessions to Telegram for mobile use.
  *
  * Bidirectional:
- *   pi → Telegram  — push agent responses after each run (with live draft streaming on by default)
- *   Telegram → pi  — inject messages as user prompts (idle or followUp delivery)
+ *   pi → Telegram  — agent responses pushed after each run with stats
+ *   pi → Telegram  — live draft streaming via sendMessageDraft (512B/4s/12s throttle)
+ *   pi → Telegram  — phase-aware heartbeat (🧠 Thinking… / 🔧 tool…)
+ *   Telegram → pi  — text, photos, voice → injected as user prompts
+ *   Telegram → pi  — inline keyboard choices tap → submit_text injected
  *
- * Draft streaming uses sendMessageDraft (Bot API 9.3+, all bots since 9.5):
- *   - 512-byte delta threshold, 4s flush interval, 12s heartbeat
- *   - Progress preview with tail excerpt when buffer exceeds 3000 bytes
- *   - Stale draft ID protection
- *   - suppressUntil backoff on 429 responses
+ * Pi commands:
+ *   /walkie          — toggle on/off
+ *   /walkie setup    — enter pairing mode
+ *   /walkie stream   — toggle draft streaming
+ *   /walkie status   — show config
  *
- * Setup:
- *   /walkie setup   — enter pairing mode (next Telegram message claims the chat)
- *   /walkie         — toggle on/off
- *   /walkie status  — show current config
- *   /walkie stream  — toggle live draft streaming
- *
- * Telegram bot commands (sent from your phone):
- *   /abort   — send abort steer to pi
- *   /status  — show agent status
- *   /new     — queue new session when agent is done
+ * Telegram commands (from your phone):
+ *   /abort    — stop agent run
+ *   /status   — agent state, model, context usage
+ *   /compact  — compress context
+ *   /think    — cycle thinking level: none → low → high
+ *   /stream   — toggle draft streaming
+ *   /mute     — silence notifications (polling continues)
+ *   /unmute   — resume notifications
+ *   /new      — queue new session
  */
 
 import { mkdir, writeFile } from "node:fs/promises";
@@ -562,7 +564,10 @@ export default function walkieExtension(pi: ExtensionAPI) {
 
   async function handleVoice(msg: tg.TelegramMessage): Promise<void> {
     await tg.setMessageReaction(config.botToken, config.chatId, msg.message_id, "👀").catch(() => {});
-    const stt = getSttProvider();
+    const voiceConfig = loadVoiceConfigSync();
+    const stt = voiceConfig.provider
+      ? createProvider(voiceConfig.provider as "groq" | "openai" | "daemon")
+      : detectProvider()?.provider ?? null;
     if (!stt) {
       await sendPlain("⚠️ No STT provider for voice transcription.\nSet GROQ_API_KEY or OPENAI_API_KEY and run /voice config.").catch(() => {});
       return;
@@ -571,7 +576,7 @@ export default function walkieExtension(pi: ExtensionAPI) {
       const fileInfo = await tg.getFile(config.botToken, msg.voice!.file_id);
       if (!fileInfo.file_path) return;
       const buf = await tg.downloadFile(config.botToken, fileInfo.file_path);
-      const lang = loadVoiceConfigSync().lang ?? "en";
+      const lang = voiceConfig.lang ?? "en";
       const transcription = await stt.transcribe(buf, lang, "", { mimeType: "audio/ogg", filename: "voice.ogg" });
       if (!transcription.trim()) {
         await sendPlain("⚠️ No speech detected.").catch(() => {});
