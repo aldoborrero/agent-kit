@@ -576,6 +576,8 @@ export default function walkieExtension(pi: ExtensionAPI) {
 
     // ── Photo → download + inject as image content ────────────────────────
     if (msg.photo && msg.photo.length > 0) {
+      await tg.setMessageReaction(config.botToken, config.chatId, msg.message_id, "👀").catch(() => {});
+
       const largest = msg.photo[msg.photo.length - 1]!;
       try {
         const fileInfo = await tg.getFile(config.botToken, largest.file_id);
@@ -595,6 +597,7 @@ export default function walkieExtension(pi: ExtensionAPI) {
           if (isStreaming) {
             pi.sendUserMessage(content, { deliverAs: "followUp" });
           } else {
+            runTriggerMessageId = msg.message_id;
             pi.sendUserMessage(content);
           }
         }
