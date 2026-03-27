@@ -219,6 +219,20 @@ const BOT_COMMANDS_ES: tg.BotCommand[] = [
 // ── Extension ─────────────────────────────────────────────────────────────────
 
 export default function walkieExtension(pi: ExtensionAPI) {
+  // ─── pi API shims ─────────────────────────────────────────────────────────
+  // getThinkingLevel / setThinkingLevel are available on ExtensionAPI but not
+  // re-exported from the package root index in this version of pi.
+
+  function getThinkingLevel(): string {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    return String((pi as any).getThinkingLevel?.() ?? "none");
+  }
+
+  function setThinkingLevel(level: string): void {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (pi as any).setThinkingLevel?.(level);
+  }
+
   // ─── Module-level state ──────────────────────────────────────────────────
 
   let config: Partial<WalkieConfig> = loadConfigSync();
@@ -465,8 +479,7 @@ export default function walkieExtension(pi: ExtensionAPI) {
         const usageStr = usage?.percent != null
           ? `${Math.round(usage.percent)}% · ${(usage.tokens ?? 0).toLocaleString()} tokens`
           : "unknown";
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const thinkingLevel = (pi as any).getThinkingLevel?.() ?? "unknown";
+        const thinkingLevel = getThinkingLevel();
         const html = [
           `📍 <b>Pi Status</b>`,
           `Project: <code>${escapeHTML(projectName)}</code>`,
@@ -483,12 +496,10 @@ export default function walkieExtension(pi: ExtensionAPI) {
 
       case "/think": {
         const levels = ["none", "low", "high"] as const;
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const current = String((pi as any).getThinkingLevel?.() ?? "none");
+        const current = getThinkingLevel();
         const idx = levels.indexOf(current as typeof levels[number]);
         const next = levels[(idx + 1) % levels.length]!;
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        (pi as any).setThinkingLevel?.(next);
+        setThinkingLevel(next);
         await sendPlain(`🧠 Thinking: ${current} → ${next}`).catch(() => {});
         break;
       }
@@ -745,13 +756,11 @@ export default function walkieExtension(pi: ExtensionAPI) {
   });
 
   pi.on("tool_call", async (event) => {
-    const toolName = (event as any).toolName as string;
-    agentPhase = `🔧 ${toolName}...`;
+    agentPhase = `🔧 ${event.toolName}...`;
   });
 
   pi.on("tool_result", async (event) => {
-    const toolName = (event as any).toolName as string;
-    if ((toolName === "edit" || toolName === "write") && !event.isError) {
+    if ((event.toolName === "edit" || event.toolName === "write") && !event.isError) {
       filesChanged++;
     }
     agentPhase = "Processing request...";
