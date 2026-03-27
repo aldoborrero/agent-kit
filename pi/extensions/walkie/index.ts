@@ -419,14 +419,18 @@ export default function walkieExtension(pi: ExtensionAPI) {
     if (!cq.data) return;
 
     if (cq.data.startsWith("wk:")) {
-      const [, rawId, optionId] = cq.data.split(":");
-      const interaction = pendingInteractions.get(Number(rawId));
+      const parts = cq.data.split(":");
+      const interactionId = Number(parts[1]);
+      const optionId = parts[2];
+      if (!Number.isFinite(interactionId) || !optionId) return;
+
+      const interaction = pendingInteractions.get(interactionId);
       if (!interaction || interaction.expiresAt <= Date.now()) return;
 
       const opt = interaction.options.find(o => o.id === optionId);
       if (!opt) return;
 
-      pendingInteractions.delete(Number(rawId));
+      pendingInteractions.delete(interactionId);
       if (interaction.messageId !== null) {
         await tg.editMessageReplyMarkup(config.botToken, config.chatId, interaction.messageId).catch(() => {});
       }
