@@ -125,7 +125,7 @@ export function appendDraftChunk(
  * - If no text yet: send synthetic "still processing" heartbeat.
  * - If nothing pending: return null.
  */
-export function heartbeatDraft(state: DraftState, nowMs: number): DraftFlush | null {
+export function heartbeatDraft(state: DraftState, nowMs: number, label?: string): DraftFlush | null {
   const elapsed = nowMs - state.lastFlushTime;
   if (elapsed < DRAFT_HEARTBEAT_INTERVAL_MS) return null;
 
@@ -142,11 +142,11 @@ export function heartbeatDraft(state: DraftState, nowMs: number): DraftFlush | n
     return null;
   }
 
-  // No visible text yet (agent is in tool-call phase) → send synthetic heartbeat
+  // No visible text yet (agent is thinking or in a tool-call phase) → send synthetic heartbeat
   state.lastFlushTime = nowMs;
   return {
     draftId: state.draftId,
-    text: buildHeartbeatText(state.startedAt, nowMs),
+    text: buildHeartbeatText(state.startedAt, nowMs, label),
     startedAt: state.startedAt,
   };
 }
@@ -187,9 +187,10 @@ export function buildTransportText(text: string, startedAt: number, nowMs: numbe
  * Synthetic heartbeat message when no visible draft text is available yet
  * (agent is in a tool-call / thinking phase with no text output).
  */
-export function buildHeartbeatText(startedAt: number, nowMs: number): string {
+export function buildHeartbeatText(startedAt: number, nowMs: number, label?: string): string {
   const elapsedSec = Math.floor((nowMs - startedAt) / 1000);
-  return `Processing request...\nElapsed: ${elapsedSec}s\n\nInterim result is still being prepared.`;
+  const header = label ?? "Processing request...";
+  return `${header}\nElapsed: ${elapsedSec}s\n\nInterim result is still being prepared.`;
 }
 
 /** Get last maxBytes bytes of text, aligned to a UTF-8 character boundary */

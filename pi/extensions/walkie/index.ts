@@ -106,6 +106,8 @@ export default function walkieExtension(pi: ExtensionAPI) {
   let filesChanged = 0;
   /** message_id of the inbound Telegram message that triggered the current run */
   let runTriggerMessageId: number | null = null;
+  /** Current activity label shown in heartbeat messages (thinking / tool / generic) */
+  let agentPhase = "Processing request...";
 
   // ─── Draft state (only active when config.streaming = true) ─────────────
 
@@ -423,6 +425,7 @@ export default function walkieExtension(pi: ExtensionAPI) {
     agentStartTime = Date.now();
     turnCount = 0;
     filesChanged = 0;
+    agentPhase = "Processing request...";
     // runTriggerMessageId is intentionally NOT reset here — it is set by
     // handleUpdate before agent_start fires, so we must preserve it.
 
@@ -444,7 +447,7 @@ export default function walkieExtension(pi: ExtensionAPI) {
     // Heartbeat timer: fires every DRAFT_HEARTBEAT_INTERVAL_MS
     heartbeatTimer = setInterval(async () => {
       if (!draftState) return;
-      const flush = heartbeatDraft(draftState, Date.now());
+      const flush = heartbeatDraft(draftState, Date.now(), agentPhase);
       if (flush) await flushDraft(flush).catch(() => {});
     }, DRAFT_HEARTBEAT_INTERVAL_MS);
   });
@@ -453,11 +456,21 @@ export default function walkieExtension(pi: ExtensionAPI) {
   // is not re-exported from the package root index — cast to any for this handler.
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   (pi as any).on("message_update", async (event: any) => {
-    if (!config.streaming || !draftState || !isConfigured(config) || !config.enabled) return;
-
     const ae = event?.assistantMessageEvent;
-    if (!ae || ae.type !== "text_delta" || typeof ae.delta !== "string") return;
+    if (!ae) return;
 
+    if (ae.type === "thinking_delta") {
+      // Track phase for heartbeat label — don't add raw thoughts to the draft buffer
+      agentPhase = "🧠 Thinking...";
+      return;
+    }
+
+    if (ae.type !== "text_delta" || typeof ae.delta !== "string") return;
+
+    // Switched from thinking to text output — reset phase label
+    agentPhase = "Processing request...";
+
+    if (!config.streaming || !draftState || !isConfigured(config) || !config.enabled) return;
     const flush = appendDraftChunk(draftState, ae.delta as string, Date.now());
     if (flush) await flushDraft(flush).catch(() => {});
   });
@@ -466,11 +479,17 @@ export default function walkieExtension(pi: ExtensionAPI) {
     turnCount = event.turnIndex + 1;
   });
 
+  pi.on("tool_call", async (event) => {
+    const toolName = (event as any).toolName as string;
+    agentPhase = `🔧 ${toolName}...`;
+  });
+
   pi.on("tool_result", async (event) => {
     const toolName = (event as any).toolName as string;
     if ((toolName === "edit" || toolName === "write") && !event.isError) {
       filesChanged++;
     }
+    agentPhase = "Processing request...";
   });
 
   pi.on("agent_end", async (event, ctx) => {
