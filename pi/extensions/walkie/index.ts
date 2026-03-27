@@ -335,6 +335,23 @@ export default function walkieExtension(pi: ExtensionAPI) {
       return;
     }
 
+    if (text.startsWith("/compact")) {
+      if (isStreaming) {
+        await sendPlain("⚠️ Cannot compact while agent is running.").catch(() => {});
+        return;
+      }
+      await sendPlain("🗜 Compacting context...").catch(() => {});
+      lastCtx?.compact({
+        onComplete: async () => {
+          await sendPlain("✅ Context compacted.").catch(() => {});
+        },
+        onError: async (err) => {
+          await sendPlain(`❌ Compaction failed: ${err.message}`).catch(() => {});
+        },
+      });
+      return;
+    }
+
     if (text.startsWith("/new")) {
       if (isStreaming) {
         pi.sendUserMessage(
