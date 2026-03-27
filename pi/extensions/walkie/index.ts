@@ -271,7 +271,7 @@ export default function walkieExtension(pi: ExtensionAPI) {
 
   // ─── Polling Loop ─────────────────────────────────────────────────────────
 
-  async function startPolling(): Promise<void> {
+  async function startPolling(initialOffset = 0): Promise<void> {
     if (pollingAbort) return; // already running
     if (!isConfigured(config) && !setupMode) return;
     if (!config.botToken) return;
@@ -280,7 +280,7 @@ export default function walkieExtension(pi: ExtensionAPI) {
     const { signal } = pollingAbort;
     const token = config.botToken;
 
-    let offset = 0;
+    let offset = initialOffset;
     let errorCount = 0;
 
     while (!signal.aborted) {
@@ -556,9 +556,12 @@ export default function walkieExtension(pi: ExtensionAPI) {
     updateStatus(ctx);
 
     if (!config.botToken) return;
-    // Start polling even when disabled — keeps /on working from Telegram
-    // without needing to restart pi. Outbound sends are gated on config.enabled.
-    startPolling().catch(() => {});
+    // Skip updates that accumulated while pi was offline, then start polling.
+    // Outbound sends are gated on config.enabled — polling always runs when configured.
+    const initialOffset = isConfigured(config)
+      ? await tg.getNextUpdateOffset(config.botToken).catch(() => 0)
+      : 0;
+    startPolling(initialOffset).catch(() => {});
 
     // Ensure bot command menu is registered (idempotent, best-effort)
     if (isConfigured(config)) {

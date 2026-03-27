@@ -160,6 +160,26 @@ export async function getUpdates(
   );
 }
 
+/**
+ * Fetch the latest pending update_id + 1 without processing any updates.
+ * Pass the result as the initial offset to startPolling() to skip messages
+ * accumulated while the bot was offline.
+ * Returns 0 if there are no pending updates or on error.
+ */
+export async function getNextUpdateOffset(token: string): Promise<number> {
+  try {
+    const updates = await call<TelegramUpdate[]>(token, "getUpdates", {
+      offset: -1,
+      timeout: 0,
+      allowed_updates: ["message", "callback_query"],
+    });
+    if (updates.length === 0) return 0;
+    return updates[updates.length - 1]!.update_id + 1;
+  } catch {
+    return 0;
+  }
+}
+
 export async function sendMessage(
   token: string,
   chatId: number,
