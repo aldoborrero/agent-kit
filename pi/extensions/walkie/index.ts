@@ -64,6 +64,10 @@ interface WalkieConfig {
   streaming: boolean;
   /** Unix timestamp (ms) until which sendMessageDraft is suppressed — set when peer returns TEXTDRAFT_PEER_INVALID */
   draftSuppressedUntil?: number;
+  /** Forum topic (message_thread_id) this instance is scoped to. Enables multi-project routing via Telegram Topics. */
+  topicId?: number;
+  /** Display name for the topic / project (shown in notifications and /status) */
+  topicName?: string;
 }
 
 function loadConfigSync(): Partial<WalkieConfig> {
