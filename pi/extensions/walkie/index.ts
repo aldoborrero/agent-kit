@@ -335,6 +335,18 @@ export default function walkieExtension(pi: ExtensionAPI) {
       return;
     }
 
+    if (text.startsWith("/think")) {
+      const levels = ["none", "low", "high"] as const;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const current = String((pi as any).getThinkingLevel?.() ?? "none");
+      const idx = levels.indexOf(current as typeof levels[number]);
+      const next = levels[(idx + 1) % levels.length]!;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (pi as any).setThinkingLevel?.(next);
+      await sendPlain(`🧠 Thinking: ${current} → ${next}`).catch(() => {});
+      return;
+    }
+
     if (text.startsWith("/compact")) {
       if (isStreaming) {
         await sendPlain("⚠️ Cannot compact while agent is running.").catch(() => {});
