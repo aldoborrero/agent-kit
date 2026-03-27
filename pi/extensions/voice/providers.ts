@@ -89,8 +89,28 @@ export class DaemonProvider implements STTProvider {
 		this.baseUrl = process.env.VOICE_DAEMON_URL ?? "http://localhost:8765";
 	}
 
-	async transcribe(_audio: Buffer, _lang: string, _hints: string): Promise<string> {
-		return "";
+	async transcribe(audio: Buffer, lang: string, _hints: string, opts?: TranscribeOptions): Promise<string> {
+		const mimeType = opts?.mimeType ?? "audio/wav";
+		const filename = opts?.filename ?? "recording.wav";
+
+		const form = new FormData();
+		form.append("file", new Blob([audio], { type: mimeType }), filename);
+
+		const url = new URL(`${this.baseUrl}/transcribe`);
+		url.searchParams.set("language", lang);
+
+		const res = await fetch(url.toString(), {
+			method: "POST",
+			body: form,
+			signal: AbortSignal.timeout(30000),
+		});
+
+		if (!res.ok) {
+			throw new Error(`Daemon transcribe failed: ${res.status} ${res.statusText}`);
+		}
+
+		const data = (await res.json()) as { text?: string; transcription?: string };
+		return data.text ?? data.transcription ?? "";
 	}
 
 	async isAvailable(): Promise<boolean> {

@@ -95,17 +95,14 @@ function loadVoiceConfigSync(): VoiceConfig {
 }
 
 /**
- * Return the best available cloud STT provider for transcribing Telegram voice
- * messages. Daemon is excluded — it only supports real-time local recording.
+ * Return the best available STT provider for transcribing Telegram voice
+ * messages. Reads ~/.pi/voice.json for the configured provider and language.
+ * Daemon is now fully supported via its POST /transcribe endpoint.
  */
 function getSttProvider(): STTProvider | null {
   const vc = loadVoiceConfigSync();
-  if (vc.provider && vc.provider !== "daemon") {
-    return createProvider(vc.provider as "groq" | "openai");
-  }
-  const detected = detectProvider();
-  if (detected && detected.name !== "daemon") return detected.provider;
-  return null;
+  if (vc.provider) return createProvider(vc.provider as "groq" | "openai" | "daemon");
+  return detectProvider()?.provider ?? null;
 }
 
 function isConfigured(c: Partial<WalkieConfig>): c is WalkieConfig {
