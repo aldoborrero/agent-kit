@@ -85,6 +85,19 @@ function isConfigured(c: Partial<WalkieConfig>): c is WalkieConfig {
   );
 }
 
+// ── Bot command menu ──────────────────────────────────────────────────────────
+
+const BOT_COMMANDS: tg.BotCommand[] = [
+  { command: "abort",   description: "Stop the current agent run" },
+  { command: "compact", description: "Compress context to free space" },
+  { command: "think",   description: "Cycle thinking: none → low → high" },
+  { command: "stream",  description: "Toggle live draft streaming" },
+  { command: "on",      description: "Enable walkie notifications" },
+  { command: "off",     description: "Disable walkie notifications" },
+  { command: "status",  description: "Show agent state, model, and context" },
+  { command: "new",     description: "Queue a new session after current run" },
+];
+
 // ── Extension ─────────────────────────────────────────────────────────────────
 
 export default function walkieExtension(pi: ExtensionAPI) {
@@ -255,11 +268,7 @@ export default function walkieExtension(pi: ExtensionAPI) {
       if (lastCtx) updateStatus(lastCtx);
 
       // Register bot commands so Telegram shows the /command menu
-      await tg.setMyCommands(config.botToken!, [
-        { command: "abort",  description: "Stop the current agent run" },
-        { command: "status", description: "Show agent state and project" },
-        { command: "new",    description: "Queue a new session after current run" },
-      ]).catch(() => {});
+      await tg.setMyCommands(config.botToken!, BOT_COMMANDS).catch(() => {});
 
       await tg
         .sendMessage(
@@ -461,11 +470,7 @@ export default function walkieExtension(pi: ExtensionAPI) {
 
     // Ensure bot command menu is registered (idempotent, best-effort)
     if (isConfigured(config)) {
-      await tg.setMyCommands(config.botToken, [
-        { command: "abort",  description: "Stop the current agent run" },
-        { command: "status", description: "Show agent state and project" },
-        { command: "new",    description: "Queue a new session after current run" },
-      ]).catch(() => {});
+      await tg.setMyCommands(config.botToken, BOT_COMMANDS).catch(() => {});
     }
 
     // Only notify on a genuinely fresh session (no prior entries)
