@@ -243,6 +243,37 @@ export default function walkieExtension(pi: ExtensionAPI) {
   /** Current activity label shown in heartbeat messages (thinking / tool / generic) */
   let agentPhase = "Processing request...";
 
+  // ─── Text debounce buffer ─────────────────────────────────────────────────
+  // Mirrors nullclaw's telegram_ingress debouncing: consecutive messages from
+  // the same chat within TEXT_DEBOUNCE_MS are merged with \n into one message
+  // before being injected into pi — so the agent sees one coherent prompt
+  // instead of N separate turns.
+
+  const TEXT_DEBOUNCE_MS = 3_000;
+
+  interface PendingTextEntry {
+    items: Array<{ text: string; messageId: number }>;
+    timer: ReturnType<typeof setTimeout>;
+  }
+
+  const pendingText = new Map<number, PendingTextEntry>();
+
+  function flushPendingText(chatId: number): void {
+    const pending = pendingText.get(chatId);
+    if (!pending) return;
+    pendingText.delete(chatId);
+
+    const merged = pending.items.map(i => i.text).join("\n");
+    const lastId = pending.items[pending.items.length - 1]!.messageId;
+
+    if (isStreaming) {
+      pi.sendUserMessage(merged, { deliverAs: "followUp" });
+    } else {
+      runTriggerMessageId = lastId;
+      pi.sendUserMessage(merged);
+    }
+  }
+
   // ─── Pending inline keyboard interactions ────────────────────────────────
 
   const pendingInteractions = new Map<number, PendingInteraction>();
@@ -538,14 +569,26 @@ export default function walkieExtension(pi: ExtensionAPI) {
     }
   }
 
-  /** Inject a text message into pi and acknowledge with 👀 */
+  /**
+   * Buffer incoming text with a 3s debounce. Rapid consecutive messages are
+   * merged with \n into one before being injected, so the agent sees a single
+   * coherent prompt. 👀 fires immediately for each message.
+   */
   function injectText(text: string, messageId: number): void {
     tg.setMessageReaction(config.botToken, config.chatId, messageId, "👀").catch(() => {});
-    if (isStreaming) {
-      pi.sendUserMessage(text, { deliverAs: "followUp" });
+
+    const chatId = config.chatId!;
+    const existing = pendingText.get(chatId);
+
+    if (existing) {
+      clearTimeout(existing.timer);
+      existing.items.push({ text, messageId });
+      existing.timer = setTimeout(() => flushPendingText(chatId), TEXT_DEBOUNCE_MS);
     } else {
-      runTriggerMessageId = messageId;
-      pi.sendUserMessage(text);
+      pendingText.set(chatId, {
+        items: [{ text, messageId }],
+        timer: setTimeout(() => flushPendingText(chatId), TEXT_DEBOUNCE_MS),
+      });
     }
   }
 
@@ -845,6 +888,8 @@ export default function walkieExtension(pi: ExtensionAPI) {
   pi.on("session_shutdown", async (_event, _ctx) => {
     stopPolling();
     stopTimers();
+    for (const { timer } of pendingText.values()) clearTimeout(timer);
+    pendingText.clear();
     if (isActive(config)) {
       await sendPlain("🔴 Pi session ended").catch(() => {});
     }
