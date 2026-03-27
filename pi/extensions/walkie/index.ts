@@ -211,6 +211,20 @@ const BOT_COMMANDS_ES: tg.BotCommand[] = [
   { command: "unmute",  description: "Reanudar notificaciones de walkie" },
 ];
 
+// ── Topic routing helpers ─────────────────────────────────────────────────────
+
+/**
+ * Returns SendMessageOptions with message_thread_id pre-filled when the config
+ * has a topicId. Merge into every outbound sendMessage call so topic routing is
+ * applied automatically without repeating the check at every call site.
+ *
+ * Usage:
+ *   await tg.sendMessage(token, chatId, text, { ...topicOptions(config), parse_mode: "HTML" });
+ */
+function topicOptions(config: WalkieConfig): Partial<tg.SendMessageOptions> {
+  return config.topicId ? { message_thread_id: config.topicId } : {};
+}
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 /**
