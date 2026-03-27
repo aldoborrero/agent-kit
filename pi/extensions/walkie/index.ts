@@ -308,27 +308,38 @@ export default function walkieExtension(pi: ExtensionAPI) {
     }
   }
 
-  /** Flush a DraftFlush to sendMessageDraft, handling 429 backoff */
-  async function flushDraft(flush: DraftFlush): Promise<void> {
-    if (!isConfigured(config) || !config.enabled || !config.streaming) return;
-    if (!draftState || flush.draftId !== draftState.draftId) return; // stale
+  type FlushResult = "ok" | "rate_limited" | "peer_invalid" | "stale" | "skipped";
+
+  /** Flush a DraftFlush to sendMessageDraft. Returns a result the caller acts on. */
+  async function flushDraft(flush: DraftFlush): Promise<FlushResult> {
+    if (!isConfigured(config) || !config.enabled || !config.streaming) return "skipped";
+    if (!draftState || flush.draftId !== draftState.draftId) return "stale";
 
     try {
       await tg.sendMessageDraft(config.botToken, config.chatId, flush.draftId, flush.text);
+      return "ok";
     } catch (err) {
       if (err instanceof tg.TelegramError) {
         if (err.statusCode === 429) {
           const backoffMs = (err.retryAfter ?? 5) * 1000;
           if (draftState) suppressDraftUntil(draftState, backoffMs);
-        } else if (err.description.includes("TEXTDRAFT_PEER_INVALID")) {
-          // This peer does not support drafts (e.g. group chat, channel).
+          return "rate_limited";
+        }
+        if (err.description.includes("TEXTDRAFT_PEER_INVALID")) {
           // Persist suppression for 24h so future sessions don't retry.
           config.draftSuppressedUntil = Date.now() + 24 * 60 * 60 * 1000;
           await persistConfig(config).catch(() => {});
-          draftState = null;
+          return "peer_invalid";
         }
       }
+      return "skipped";
     }
+  }
+
+  /** Call flushDraft and null out draftState if the peer doesn't support drafts. */
+  async function flushDraftAndHandleResult(flush: DraftFlush): Promise<void> {
+    const result = await flushDraft(flush).catch(() => "skipped" as FlushResult);
+    if (result === "peer_invalid") draftState = null;
   }
 
   function stopTimers(): void {
@@ -726,7 +737,7 @@ export default function walkieExtension(pi: ExtensionAPI) {
     heartbeatTimer = setInterval(async () => {
       if (!draftState) return;
       const flush = heartbeatDraft(draftState, Date.now(), agentPhase);
-      if (flush) await flushDraft(flush).catch(() => {});
+      if (flush) await flushDraftAndHandleResult(flush);
     }, DRAFT_HEARTBEAT_INTERVAL_MS);
   });
 
@@ -750,7 +761,7 @@ export default function walkieExtension(pi: ExtensionAPI) {
 
     if (!config.streaming || !draftState || !isConfigured(config) || !config.enabled) return;
     const flush = appendDraftChunk(draftState, ae.delta as string, Date.now());
-    if (flush) await flushDraft(flush).catch(() => {});
+    if (flush) await flushDraftAndHandleResult(flush);
   });
 
   pi.on("turn_start", async (event) => {
