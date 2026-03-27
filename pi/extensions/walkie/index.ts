@@ -323,29 +323,36 @@ export default function walkieExtension(pi: ExtensionAPI) {
     setStatus("walkie", theme.fg("success", "walkie:on"));
   }
 
-  /** Send text to Telegram as HTML (converted from markdown), falling back to plain */
-  async function send(text: string, extraOptions?: Partial<tg.SendMessageOptions>): Promise<void> {
-    if (!isActive(config)) return;
+  /**
+   * Send text to Telegram as HTML (converted from markdown), falling back to plain.
+   * Returns the message_id of the last chunk sent, or null on failure / inactive.
+   */
+  async function send(text: string, extraOptions?: Partial<tg.SendMessageOptions>): Promise<number | null> {
+    if (!isActive(config)) return null;
     const { botToken, chatId } = config;
 
     const formatted = formatForTelegram(text);
     const chunks = chunkText(formatted);
 
+    let lastMessageId: number | null = null;
     for (const chunk of chunks) {
       try {
-        await tg.sendMessage(botToken, chatId, chunk, { parse_mode: "HTML", ...extraOptions });
+        const msg = await tg.sendMessage(botToken, chatId, chunk, { parse_mode: "HTML", ...extraOptions });
+        lastMessageId = msg.message_id;
       } catch (err) {
         // HTML parse failure (400) → abandon formatted send, retry ALL as plain
         if (err instanceof tg.TelegramError && err.statusCode === 400) {
           const plainChunks = chunkText(text);
           for (const plain of plainChunks) {
-            await tg.sendMessage(botToken, chatId, plain, extraOptions).catch(() => {});
+            const msg = await tg.sendMessage(botToken, chatId, plain, extraOptions).catch(() => null);
+            if (msg) lastMessageId = msg.message_id;
           }
-          return;
+          return lastMessageId;
         }
         // Other errors (network, rate limit) → silently ignore
       }
     }
+    return lastMessageId;
   }
 
   /** Send plain text with no parse mode */
@@ -853,31 +860,12 @@ export default function walkieExtension(pi: ExtensionAPI) {
       : undefined;
 
     if (choices) {
-      // Send with inline keyboard
       interactionSeq++;
       const id = interactionSeq;
-      const keyboard = buildChoicesKeyboard(id, choices);
-      const formatted = formatForTelegram(body);
-
-      let sentMessageId: number | null = null;
-      try {
-        const msg = await tg.sendMessage(config.botToken, config.chatId, formatted, {
-          parse_mode: "HTML",
-          reply_markup: keyboard,
-          ...replyOptions,
-        });
-        sentMessageId = msg.message_id;
-      } catch {
-        // HTML failed → retry plain
-        try {
-          const msg = await tg.sendMessage(config.botToken, config.chatId, body, {
-            reply_markup: keyboard,
-            ...replyOptions,
-          });
-          sentMessageId = msg.message_id;
-        } catch { /* best-effort */ }
-      }
-
+      const sentMessageId = await send(body, {
+        reply_markup: buildChoicesKeyboard(id, choices),
+        ...replyOptions,
+      }).catch(() => null);
       pendingInteractions.set(id, {
         options: choices,
         messageId: sentMessageId,
