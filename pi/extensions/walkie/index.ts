@@ -314,11 +314,22 @@ export default function walkieExtension(pi: ExtensionAPI) {
 
     if (text.startsWith("/status")) {
       const projectName = lastCtx ? basename(lastCtx.cwd) : "unknown";
+      const modelName = lastCtx?.model?.name ?? "unknown";
+      const usage = lastCtx?.getContextUsage();
+      const usageStr = usage?.percent != null
+        ? `${Math.round(usage.percent)}% · ${(usage.tokens ?? 0).toLocaleString()} tokens`
+        : "unknown";
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const thinkingLevel = (pi as any).getThinkingLevel?.() ?? "unknown";
       const html = [
         `📍 <b>Pi Status</b>`,
         `Project: <code>${escapeHTML(projectName)}</code>`,
         `Agent: ${isStreaming ? "🔄 running" : "⏸ idle"}`,
+        `Model: <code>${escapeHTML(String(modelName))}</code>`,
+        `Context: ${usageStr}`,
+        `Thinking: ${thinkingLevel}`,
         `Streaming: ${config.streaming ? "✅" : "❌"}`,
+        `Walkie: ${config.enabled ? "✅" : "❌"}`,
       ].join("\n");
       await tg.sendMessage(config.botToken, config.chatId, html, { parse_mode: "HTML" }).catch(() => {});
       return;
