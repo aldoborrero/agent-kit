@@ -177,9 +177,15 @@ export default function walkieExtension(pi: ExtensionAPI) {
     try {
       await tg.sendMessageDraft(config.botToken, config.chatId, flush.draftId, flush.text);
     } catch (err) {
-      if (err instanceof tg.TelegramError && err.statusCode === 429) {
-        const backoffMs = (err.retryAfter ?? 5) * 1000;
-        if (draftState) suppressDraftUntil(draftState, backoffMs);
+      if (err instanceof tg.TelegramError) {
+        if (err.statusCode === 429) {
+          const backoffMs = (err.retryAfter ?? 5) * 1000;
+          if (draftState) suppressDraftUntil(draftState, backoffMs);
+        } else if (err.description.includes("TEXTDRAFT_PEER_INVALID")) {
+          // This peer does not support drafts (e.g. group chat, channel).
+          // Disable drafts for the rest of this run to avoid repeated failures.
+          draftState = null;
+        }
       }
     }
   }
