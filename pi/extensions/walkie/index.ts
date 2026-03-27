@@ -205,6 +205,29 @@ const BOT_COMMANDS_ES: tg.BotCommand[] = [
   { command: "unmute",  description: "Reanudar notificaciones de walkie" },
 ];
 
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+/**
+ * Extract the last text-only assistant message from the agent's message history.
+ * Skips thinking blocks (content type !== "text"), tool calls, and non-assistant turns.
+ *
+ * AgentMessage's role/content fields are not re-exported from pi's public API
+ * surface — the single cast is isolated here rather than scattered in agent_end.
+ */
+function extractLastAssistantText(messages: unknown[]): string {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const msg = messages[i] as { role?: string; content?: Array<{ type?: string; text?: string }> };
+    if (msg.role !== "assistant") continue;
+    const text = (msg.content ?? [])
+      .filter(c => c.type === "text")
+      .map(c => c.text ?? "")
+      .join("\n")
+      .trim();
+    if (text) return text;
+  }
+  return "";
+}
+
 // ── Extension ─────────────────────────────────────────────────────────────────
 
 export default function walkieExtension(pi: ExtensionAPI) {
@@ -825,24 +848,7 @@ export default function walkieExtension(pi: ExtensionAPI) {
     const elapsed = agentStartTime !== null ? Date.now() - agentStartTime : 0;
     agentStartTime = null;
 
-    // Extract last assistant text (skip thinking blocks + tool calls)
-    let lastAssistantText = "";
-    for (const msg of [...event.messages].reverse()) {
-      const m = msg as any;
-      if (m.role !== "assistant") continue;
-
-      const text = ((m.content ?? []) as any[])
-        .filter((c: any) => c.type === "text")
-        .map((c: any) => (c.text ?? "") as string)
-        .join("\n")
-        .trim();
-
-      if (text) {
-        lastAssistantText = text;
-        break;
-      }
-    }
-
+    const lastAssistantText = extractLastAssistantText(event.messages);
     if (!lastAssistantText) return;
 
     const stats: AgentStats = {
