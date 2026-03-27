@@ -595,16 +595,20 @@ export default function walkieExtension(pi: ExtensionAPI) {
           ? `${Math.round(usage.percent)}% · ${(usage.tokens ?? 0).toLocaleString()} tokens`
           : "unknown";
         const thinkingLevel = getThinkingLevel();
+        const topicLine = config.topicId
+          ? `Topic: <code>${escapeHTML(config.topicName ?? String(config.topicId))}</code> (#${config.topicId})`
+          : null;
         const html = [
           `📍 <b>Pi Status</b>`,
           `Project: <code>${escapeHTML(projectName)}</code>`,
+          topicLine,
           `Agent: ${isStreaming ? "🔄 running" : "⏸ idle"}`,
           `Model: <code>${escapeHTML(String(modelName))}</code>`,
           `Context: ${usageStr}`,
           `Thinking: ${thinkingLevel}`,
           `Streaming: ${config.streaming ? "✅" : "❌"}`,
           `Walkie: ${config.enabled ? "✅" : "❌"}`,
-        ].join("\n");
+        ].filter(Boolean).join("\n");
         await tg.sendMessage(config.botToken, config.chatId, html, { ...topicOptions(config), parse_mode: "HTML" }).catch(() => {});
         break;
       }
@@ -808,7 +812,7 @@ export default function walkieExtension(pi: ExtensionAPI) {
     // Only notify on a genuinely fresh session (no prior entries)
     const isFresh = ctx.sessionManager.getEntries().length === 0;
     if (isFresh && isConfigured(config)) {
-      const projectName = basename(ctx.cwd);
+      const projectName = config.topicName ?? basename(ctx.cwd);
       await sendPlain(`🟢 Pi started · ${projectName}`).catch(() => {});
     }
   });
@@ -816,7 +820,7 @@ export default function walkieExtension(pi: ExtensionAPI) {
   pi.on("session_switch", async (_event, ctx) => {
     lastCtx = ctx;
     if (!isActive(config)) return;
-    const projectName = basename(ctx.cwd);
+    const projectName = config.topicName ?? basename(ctx.cwd);
     await sendPlain(`📂 Session switched · ${projectName}`).catch(() => {});
   });
 
