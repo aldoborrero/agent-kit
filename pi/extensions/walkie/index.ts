@@ -726,6 +726,12 @@ export default function walkieExtension(pi: ExtensionAPI) {
     const senderId = update.message?.from?.id ?? update.callback_query?.from.id;
     if (senderId !== config.allowedUserId) return;
 
+    // ── Topic filter: ignore messages not in our configured topic ─────────
+    if (config.topicId !== undefined) {
+      const msgThreadId = update.message?.message_thread_id ?? update.callback_query?.message?.message_thread_id;
+      if (msgThreadId !== config.topicId) return;
+    }
+
     // ── Inline button ─────────────────────────────────────────────────────
     if (update.callback_query) {
       await handleCallbackQuery(update.callback_query);
