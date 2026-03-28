@@ -2,6 +2,27 @@
 
 Records all session activity to a SQLite database for performance tracking and analytics. Uses [better-sqlite3](https://github.com/WiseLibs/better-sqlite3) for direct file-backed storage.
 
+## CLI
+
+### Command: `/recorder`
+
+| Usage | Description |
+|-------|-------------|
+| `/recorder` | Show current recorder status |
+| `/recorder on` | Enable recording |
+| `/recorder off` | Disable recording |
+| `/recorder stats` | Show aggregate stats (sessions, turns, tool calls, cost) |
+
+### Flag: `--no-recorder`
+
+Start with recording disabled:
+
+```bash
+pi --no-recorder
+```
+
+When disabled, the status bar shows `recorder:off`. Re-enable at any time with `/recorder on`.
+
 ## Database
 
 **Location**: `~/.pi/agent/recorder.db`

@@ -477,6 +477,7 @@ databases:
 let db: BetterSqlite3Database | null = null;
 let moduleAvailable = true;
 let moduleError: string | null = null;
+let enabled = true;
 
 let state = {
   sessionId: null as string | null,
@@ -486,6 +487,9 @@ let state = {
   currentIteration: 0,
   toolCallStarts: new Map<string, number>(),
 };
+
+// Max age for orphaned tool call entries (5 minutes)
+const TOOL_CALL_TTL_MS = 5 * 60 * 1000;
 
 // Cached constructor
 let DatabaseCtor: BetterSqlite3Constructor | null = null;
@@ -579,9 +583,123 @@ function truncate(text: string): string {
   return text;
 }
 
+// Helper: Update status widget
+function updateStatus(ctx: ExtensionContext): void {
+  if (!ctx.hasUI) return;
+  if (enabled) {
+    // Only show when disabled (enabled is the expected default state — matches notify pattern)
+    ctx.ui.setStatus("recorder", undefined);
+  } else {
+    ctx.ui.setStatus("recorder", [ctx.ui.theme.fg("warning", "recorder:off")]);
+  }
+}
+
+// Helper: Prune orphaned tool call start timestamps older than TTL
+function pruneToolCallStarts(): void {
+  if (state.toolCallStarts.size === 0) return;
+  const cutoff = Date.now() - TOOL_CALL_TTL_MS;
+  for (const [id, ts] of state.toolCallStarts) {
+    if (ts < cutoff) {
+      state.toolCallStarts.delete(id);
+    }
+  }
+}
+
 export default function recorderExtension(pi: ExtensionAPI) {
+  // Flag: --no-recorder to disable recording at startup
+  pi.registerFlag("no-recorder", {
+    description: "Disable session recording to SQLite",
+    type: "boolean",
+    default: false,
+  });
+
+  // Command: /recorder [status|on|off|stats]
+  pi.registerCommand("recorder", {
+    description: "Show recorder status or toggle recording (/recorder, /recorder on, /recorder off, /recorder stats)",
+    handler: async (args: string, ctx: ExtensionContext) => {
+      const sub = args?.trim().toLowerCase() ?? "";
+
+      if (sub === "on" || sub === "enable") {
+        enabled = true;
+        try {
+          await initDatabase();
+        } catch (e) {
+          const msg = e instanceof Error ? e.message : String(e);
+          ctx.ui.notify(`${EXT_NAME}: failed to initialize — ${msg}`, "error");
+          return;
+        }
+        updateStatus(ctx);
+        ctx.ui.notify(`${EXT_NAME}: recording enabled`, "info");
+        return;
+      }
+
+      if (sub === "off" || sub === "disable") {
+        enabled = false;
+        updateStatus(ctx);
+        ctx.ui.notify(`${EXT_NAME}: recording disabled`, "info");
+        return;
+      }
+
+      if (sub === "stats") {
+        if (!db) {
+          ctx.ui.notify(`${EXT_NAME}: database not available`, "warning");
+          return;
+        }
+        try {
+          const sessionCount = (db.prepare("SELECT count(*) AS c FROM sessions").get() as { c: number })?.c ?? 0;
+          const turnCount = (db.prepare("SELECT count(*) AS c FROM turns").get() as { c: number })?.c ?? 0;
+          const toolCallCount = (db.prepare("SELECT count(*) AS c FROM tool_calls").get() as { c: number })?.c ?? 0;
+          const totalCost = (db.prepare("SELECT round(sum(total_cost), 4) AS c FROM sessions").get() as { c: number | null })?.c ?? 0;
+          const dbPath = join(homedir(), DB_DIR, DB_FILENAME);
+
+          pi.sendMessage({
+            customType: EXT_NAME,
+            content: [
+              `**Recorder Stats**`,
+              `Sessions: ${sessionCount}`,
+              `Turns: ${turnCount}`,
+              `Tool calls: ${toolCallCount}`,
+              `Total cost: $${totalCost}`,
+              `Database: \`${dbPath}\``,
+            ].join("\n"),
+            display: true,
+          });
+        } catch (e) {
+          console.error(LOG_PREFIX, "stats query error:", e);
+          ctx.ui.notify(`${EXT_NAME}: failed to query stats`, "error");
+        }
+        return;
+      }
+
+      // Default: show status
+      const dbPath = join(homedir(), DB_DIR, DB_FILENAME);
+      const status = enabled ? "on" : "off";
+      const dbExists = db ? "connected" : "not connected";
+      pi.sendMessage({
+        customType: EXT_NAME,
+        content: [
+          `**Recorder**`,
+          `Status: ${status}`,
+          `Database: ${dbExists} (\`${dbPath}\`)`,
+          `Session: ${state.sessionId ?? "none"}`,
+          `Current turn: ${state.currentTurnId ?? "none"}`,
+        ].join("\n"),
+        display: true,
+      });
+    },
+  });
+
   // Session start: initialize database and record session
   pi.on("session_start", async (_event, ctx: ExtensionContext) => {
+    // Respect --no-recorder flag
+    if (pi.getFlag("no-recorder")) {
+      enabled = false;
+    }
+
+    updateStatus(ctx);
+
+    if (!enabled) return;
+
     try {
       await initDatabase();
 
@@ -595,13 +713,14 @@ export default function recorderExtension(pi: ExtensionAPI) {
       const modelProvider = ctx.model?.provider ?? null;
       const modelId = ctx.model?.id ?? null;
 
+      // ON CONFLICT: preserve original started_at to avoid losing the real start time on resumed sessions
       safeRun(
         `INSERT INTO sessions (id, session_file, cwd, started_at, model_provider, model_id)
          VALUES (?, ?, ?, ?, ?, ?)
          ON CONFLICT(id) DO UPDATE SET
            session_file = excluded.session_file,
-           model_provider = excluded.model_provider,
-           model_id = excluded.model_id`,
+           model_provider = COALESCE(excluded.model_provider, sessions.model_provider),
+           model_id = COALESCE(excluded.model_id, sessions.model_id)`,
         [state.sessionId, sessionFile, ctx.cwd, Date.now(), modelProvider, modelId],
       );
 
@@ -616,7 +735,7 @@ export default function recorderExtension(pi: ExtensionAPI) {
 
   // Input: record user message
   pi.on("input", async (event: InputEvent) => {
-    if (!db || !state.sessionId) return;
+    if (!enabled || !db || !state.sessionId) return;
 
     const content = truncate(event.text);
 
@@ -631,30 +750,30 @@ export default function recorderExtension(pi: ExtensionAPI) {
   pi.on("session_shutdown", async () => {
     if (!db || !state.sessionId) return;
 
-    try {
-      safeRun(
-        `UPDATE sessions SET ended_at = ? WHERE id = ?`,
-        [Date.now(), state.sessionId],
-      );
-    } catch (e) {
-      console.error(LOG_PREFIX, "session_shutdown error:", e);
-    } finally {
-      state.toolCallStarts.clear();
-      state.sessionId = null;
-      if (db) {
-        try {
-          db.close();
-        } catch (e) {
-          console.error(LOG_PREFIX, "db.close() error:", e);
-        }
-        db = null;
+    // safeRun already catches SQL errors internally
+    safeRun(
+      `UPDATE sessions SET ended_at = ? WHERE id = ?`,
+      [Date.now(), state.sessionId],
+    );
+
+    state.toolCallStarts.clear();
+    state.sessionId = null;
+    if (db) {
+      try {
+        db.close();
+      } catch (e) {
+        console.error(LOG_PREFIX, "db.close() error:", e);
       }
+      db = null;
     }
   });
 
   // Turn start: record turn beginning
   pi.on("turn_start", async (event: TurnStartEvent) => {
-    if (!db || !state.sessionId) return;
+    if (!enabled || !db || !state.sessionId) return;
+
+    // Prune orphaned tool call timestamps to prevent unbounded Map growth
+    pruneToolCallStarts();
 
     try {
       state.currentTurnStartedAt = Date.now();
@@ -694,7 +813,7 @@ export default function recorderExtension(pi: ExtensionAPI) {
 
   // Turn end: record turn completion
   pi.on("turn_end", async (event: TurnEndEvent) => {
-    if (!db || !state.sessionId || !state.currentTurnId) return;
+    if (!enabled || !db || !state.sessionId || !state.currentTurnId) return;
 
     try {
       const endedAt = Date.now();
@@ -773,7 +892,7 @@ export default function recorderExtension(pi: ExtensionAPI) {
 
   // Tool call: record tool invocation start
   pi.on("tool_call", async (event: ToolCallEvent) => {
-    if (!db || !state.sessionId) return;
+    if (!enabled || !db || !state.sessionId) return;
 
     try {
       const startedAt = Date.now();
@@ -803,7 +922,7 @@ export default function recorderExtension(pi: ExtensionAPI) {
 
   // Tool result: record tool completion
   pi.on("tool_result", async (event: ToolResultEvent) => {
-    if (!db || !state.sessionId) return;
+    if (!enabled || !db || !state.sessionId) return;
 
     try {
       const endedAt = Date.now();
@@ -829,7 +948,7 @@ export default function recorderExtension(pi: ExtensionAPI) {
 
   // Model select: record model changes
   pi.on("model_select", async (event: ModelSelectEvent) => {
-    if (!db || !state.sessionId) return;
+    if (!enabled || !db || !state.sessionId) return;
 
     try {
       safeRun(
