@@ -38,8 +38,8 @@ export interface DraftState {
   draftId: number;
   /** Accumulated text chunks from message_update events */
   buffer: string;
-  /** buffer byte length at last flush — for delta calculation */
-  lastFlushLen: number;
+  /** buffer character offset at last flush — slice by this to get unflushed content */
+  lastFlushCharOffset: number;
   /** Date.now() at last flush — for interval calculation */
   lastFlushTime: number;
   /** Date.now() when this draft / agent run started */
@@ -58,7 +58,7 @@ export function createDraftState(draftId: number, startedAt: number): DraftState
   return {
     draftId,
     buffer: "",
-    lastFlushLen: 0,
+    lastFlushCharOffset: 0,
     lastFlushTime: startedAt,
     startedAt,
     suppressUntil: 0,
@@ -76,9 +76,9 @@ function hasVisibleText(text: string): boolean {
 }
 
 function pendingBytesSinceFlush(state: DraftState): number {
-  // We track lastFlushLen as a character index (Buffer.byteLength of sliced string)
-  // Use character-level tracking for simplicity
-  const flushed = byteLength(state.buffer.slice(0, state.lastFlushLen));
+  // lastFlushCharOffset is a character index, not a byte offset. Slicing by it
+  // is correct; the byte lengths are then measured on the resulting substrings.
+  const flushed = byteLength(state.buffer.slice(0, state.lastFlushCharOffset));
   const total = byteLength(state.buffer);
   return total - flushed;
 }
@@ -91,7 +91,7 @@ function shouldFlush(state: DraftState, nowMs: number): boolean {
 }
 
 function hasPendingVisible(state: DraftState): boolean {
-  const pending = state.buffer.slice(state.lastFlushLen);
+  const pending = state.buffer.slice(state.lastFlushCharOffset);
   return hasVisibleText(pending);
 }
 
@@ -112,7 +112,7 @@ export function appendDraftChunk(
   if (!hasVisibleText(state.buffer)) return null;
 
   const text = buildTransportText(state.buffer, state.startedAt, nowMs);
-  state.lastFlushLen = state.buffer.length;
+  state.lastFlushCharOffset = state.buffer.length;
   state.lastFlushTime = nowMs;
 
   return { draftId: state.draftId, text, startedAt: state.startedAt };
@@ -131,13 +131,13 @@ export function heartbeatDraft(state: DraftState, nowMs: number, label?: string)
   // Pending visible text → flush it
   if (hasPendingVisible(state)) {
     const text = buildTransportText(state.buffer, state.startedAt, nowMs);
-    state.lastFlushLen = state.buffer.length;
+    state.lastFlushCharOffset = state.buffer.length;
     state.lastFlushTime = nowMs;
     return { draftId: state.draftId, text, startedAt: state.startedAt };
   }
 
   // Already flushed all visible content → nothing to do
-  if (state.buffer.length > 0 && state.lastFlushLen >= state.buffer.length) {
+  if (state.buffer.length > 0 && state.lastFlushCharOffset >= state.buffer.length) {
     return null;
   }
 
@@ -308,13 +308,16 @@ export function chunkText(text: string, maxBytes = TELEGRAM_MAX_BYTES): string[]
   const chunks: string[] = [];
   const paragraphs = text.split(/\n\n+/);
   let current = "";
-  let inPre = false;
+  // Track nesting depth instead of toggling a boolean — a toggle miscounts
+  // paragraphs with multiple open/close tags (e.g. 2 opens + 1 close would
+  // toggle once even though the net depth is +1). Math.max guards malformed HTML.
+  let inPreDepth = 0;
 
   for (const para of paragraphs) {
-    // Track <pre> block balance so we never split inside a code block
     const opens = (para.match(/<pre\b/gi) ?? []).length;
     const closes = (para.match(/<\/pre>/gi) ?? []).length;
-    if (opens !== closes) inPre = !inPre;
+    inPreDepth = Math.max(0, inPreDepth + opens - closes);
+    const inPre = inPreDepth > 0;
 
     const separator = current ? "\n\n" : "";
     const candidate = current + separator + para;

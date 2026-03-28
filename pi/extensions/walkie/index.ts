@@ -948,7 +948,7 @@ export default function walkieExtension(pi: ExtensionAPI) {
     // Keep-alive typing indicator every 4s until the first draft flush is visible
     typingTimer = setInterval(async () => {
       if (!isActive(config)) return;
-      if (draftState?.lastFlushLen) return; // draft is already visible, stop typing indicator
+      if (draftState?.lastFlushCharOffset) return; // draft is already visible, stop typing indicator
       await tg.sendChatAction(config.botToken!, config.chatId!, "typing", config.topicId).catch(() => {});
     }, 4_000);
 
