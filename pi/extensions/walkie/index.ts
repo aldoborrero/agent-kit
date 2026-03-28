@@ -320,6 +320,7 @@ export default function walkieExtension(pi: ExtensionAPI) {
   // ─── Module-level state ──────────────────────────────────────────────────
 
   let config: Partial<WalkieConfig> = loadConfigSync();
+  let cachedVoiceConfig: VoiceConfig = {};
   let pollingAbort: AbortController | null = null;
   /** True while pi agent loop is running (between agent_start → agent_end) */
   let isStreaming = false;
@@ -805,7 +806,7 @@ export default function walkieExtension(pi: ExtensionAPI) {
 
   async function handleVoice(msg: tg.TelegramMessage): Promise<void> {
     await tg.setMessageReaction(config.botToken, config.chatId, msg.message_id, "👀").catch(() => {});
-    const voiceConfig = loadVoiceConfigSync();
+    const voiceConfig = cachedVoiceConfig;
     const stt = voiceConfig.provider
       ? createProvider(voiceConfig.provider as "groq" | "openai" | "daemon")
       : detectProvider()?.provider ?? null;
@@ -842,6 +843,7 @@ export default function walkieExtension(pi: ExtensionAPI) {
 
   async function handleUpdate(update: tg.TelegramUpdate): Promise<void> {
     // ── Setup mode: claim the first real user ────────────────────────────
+    cleanExpiredInteractions();
     if (setupMode && update.message?.from && !update.message.from.is_bot) {
       await handleSetupPairing(update.message);
       return;
@@ -893,6 +895,7 @@ export default function walkieExtension(pi: ExtensionAPI) {
     // Project-local (~/<cwd>/.pi/walkie.json) holds topicId/topicName so each
     // pi instance in a different project has its own topic without collision.
     config = { enabled: true, streaming: true, ...loadConfigSync(), ...loadProjectConfigSync(ctx.cwd) };
+    cachedVoiceConfig = loadVoiceConfigSync();
 
     updateStatus(ctx);
 
