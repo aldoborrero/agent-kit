@@ -410,25 +410,45 @@ export default function walkieExtension(pi: ExtensionAPI) {
     if (!isActive(config)) return null;
     const { botToken, chatId } = config;
 
+    // Detach reply_markup so it is only attached to the last chunk, not every chunk.
+    const { reply_markup, ...restExtra } = extraOptions ?? {};
+    const topic = topicOptions(config);
+
     const formatted = formatForTelegram(text);
     const chunks = chunkText(formatted);
 
     let lastMessageId: number | null = null;
-    for (const chunk of chunks) {
+    for (let i = 0; i < chunks.length; i++) {
+      const isLast = i === chunks.length - 1;
+      const markupOpt = isLast && reply_markup ? { reply_markup } : {};
+
       try {
-        const msg = await tg.sendMessage(botToken, chatId, chunk, { ...topicOptions(config), parse_mode: "HTML", ...extraOptions });
+        const msg = await tg.sendMessage(botToken, chatId, chunks[i]!, {
+          ...topic,
+          parse_mode: "HTML",
+          ...restExtra,
+          ...markupOpt,
+        });
         lastMessageId = msg.message_id;
       } catch (err) {
-        // HTML parse failure (400) → abandon formatted send, retry ALL as plain
-        if (err instanceof tg.TelegramError && err.statusCode === 400) {
-          const plainChunks = chunkText(text);
-          for (const plain of plainChunks) {
-            const msg = await tg.sendMessage(botToken, chatId, plain, { ...topicOptions(config), ...extraOptions }).catch(() => null);
-            if (msg) lastMessageId = msg.message_id;
-          }
-          return lastMessageId;
+        if (!(err instanceof tg.TelegramError && err.statusCode === 400)) continue;
+
+        // HTML parse failure on chunk i — fall back to plain text for this and all
+        // remaining chunks. Chunks 0…i-1 were already sent successfully as HTML.
+        // Re-chunk the original plain text; in practice 400 fires on chunk 0 so
+        // i === 0 and the full text is retried as plain with no duplicate sends.
+        const plainChunks = chunkText(text);
+        for (let j = i; j < plainChunks.length; j++) {
+          const plainIsLast = j === plainChunks.length - 1;
+          const plainMarkup = plainIsLast && reply_markup ? { reply_markup } : {};
+          const msg = await tg.sendMessage(botToken, chatId, plainChunks[j]!, {
+            ...topic,
+            ...restExtra,
+            ...plainMarkup,
+          }).catch(() => null);
+          if (msg) lastMessageId = msg.message_id;
         }
-        // Other errors (network, rate limit) → silently ignore
+        return lastMessageId;
       }
     }
     return lastMessageId;
