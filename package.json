@@ -34,7 +34,9 @@
     ],
     "extensions": [
       "pi/extensions/ast-grep",
+      "pi/extensions/brave-search",
       "pi/extensions/direnv",
+      "pi/extensions/exa-search",
       "pi/extensions/exit",
       "pi/extensions/git-checkpoint",
       "pi/extensions/github-search",
@@ -42,6 +44,7 @@
       "pi/extensions/inline-bash",
       "pi/extensions/jina",
       "pi/extensions/loop",
+      "pi/extensions/lsp-guidelines",
       "pi/extensions/notify",
       "pi/extensions/plan-mode",
       "pi/extensions/questionnaire",
@@ -54,9 +57,10 @@
       "pi/extensions/voice",
       "pi/extensions/context",
       "pi/extensions/cron",
-      "pi-lsp-extension",
-      "pi-mcp-adapter",
-      "pi-interactive-shell"
+      "pi/extensions/walkie",
+      "node_modules/pi-lsp-extension",
+      "node_modules/pi-mcp-adapter",
+      "node_modules/pi-interactive-shell"
     ]
   }
 }
