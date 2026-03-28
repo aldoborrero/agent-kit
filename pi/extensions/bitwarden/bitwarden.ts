@@ -1,18 +1,20 @@
 /**
- * Bitwarden CLI Extension
+ * Bitwarden Extension (via rbw)
  *
- * Secure access to Bitwarden vault items via the `bw` CLI.
+ * Secure access to Bitwarden vault items via rbw (unofficial Bitwarden CLI).
+ * rbw uses a background agent (rbw-agent) to hold decryption keys in memory,
+ * eliminating the need for session token management.
  *
  * Security design:
- *   - Session tokens kept in process.env, never exposed to LLM
- *   - Passwords masked by default, require explicit user confirmation
+ *   - No session tokens or secrets in process.env
+ *   - Passwords masked by default, require explicit user confirmation to expose
  *   - Read-only vault access (get/list only)
- *   - Auto-lock on session shutdown
- *   - No master password handling (interactive unlock only)
+ *   - rbw-agent handles key lifecycle independently
  *
  * Requirements:
- *   - bw CLI installed and in PATH
- *   - bw login completed before session start
+ *   - rbw installed and in PATH (https://github.com/doy/rbw)
+ *   - rbw configured: `rbw config set email <email>`
+ *   - rbw registered: `rbw register` (once per device)
  */
 
 import { execSync, spawn } from "node:child_process";
@@ -22,52 +24,14 @@ import type {
 } from "@mariozechner/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
 
-const SESSION_ENV_KEY = "BW_SESSION";
 const MASKED = "********";
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
-interface BwItem {
-  id: string;
-  name: string;
-  type: number; // 1=login, 2=secureNote, 3=card, 4=identity
-  folderId?: string;
-  login?: {
-    username?: string;
-    password?: string;
-    totp?: string;
-    uris?: { uri: string }[];
-  };
-  notes?: string;
-  fields?: { name: string; value: string; type: number }[];
-  card?: {
-    cardholderName?: string;
-    brand?: string;
-    number?: string;
-    expMonth?: string;
-    expYear?: string;
-    code?: string;
-  };
-  identity?: {
-    firstName?: string;
-    lastName?: string;
-    email?: string;
-    phone?: string;
-  };
-}
-
-function getSession(): string | undefined {
-  return process.env[SESSION_ENV_KEY];
-}
-
-function runBw(args: string[]): Promise<string> {
-  const session = getSession();
-  const fullArgs = session ? [...args, "--session", session] : args;
-
+function runRbw(args: string[]): Promise<string> {
   return new Promise((resolve, reject) => {
-    const child = spawn("bw", fullArgs, {
+    const child = spawn("rbw", args, {
       stdio: ["pipe", "pipe", "pipe"],
-      env: { ...process.env },
     });
 
     let stdout = "";
@@ -83,7 +47,7 @@ function runBw(args: string[]): Promise<string> {
 
     child.on("close", (code) => {
       if (code !== 0) {
-        reject(new Error(stderr.trim() || `bw exited with code ${code}`));
+        reject(new Error(stderr.trim() || `rbw exited with code ${code}`));
         return;
       }
       resolve(stdout.trim());
@@ -95,23 +59,9 @@ function runBw(args: string[]): Promise<string> {
   });
 }
 
-function getVaultStatus(): "locked" | "unlocked" | "unauthenticated" | "unknown" {
-  try {
-    const output = execSync("bw status", {
-      encoding: "utf-8",
-      stdio: ["pipe", "pipe", "pipe"],
-      timeout: 10_000,
-    });
-    const status = JSON.parse(output);
-    return status.status ?? "unknown";
-  } catch {
-    return "unknown";
-  }
-}
-
 function isAvailable(): boolean {
   try {
-    execSync("bw --version", {
+    execSync("rbw --version", {
       encoding: "utf-8",
       stdio: ["pipe", "pipe", "pipe"],
       timeout: 5_000,
@@ -122,91 +72,34 @@ function isAvailable(): boolean {
   }
 }
 
-/** Strip sensitive fields from an item, replacing with masked values. */
-function sanitizeItem(item: BwItem, expose: boolean): Record<string, unknown> {
-  const result: Record<string, unknown> = {
-    id: item.id,
-    name: item.name,
-    type: ["unknown", "login", "secureNote", "card", "identity"][item.type] ?? "unknown",
-  };
-
-  if (item.folderId) {
-    result.folderId = item.folderId;
+function isUnlocked(): boolean {
+  try {
+    execSync("rbw unlocked", {
+      encoding: "utf-8",
+      stdio: ["pipe", "pipe", "pipe"],
+      timeout: 5_000,
+    });
+    return true;
+  } catch {
+    return false;
   }
-
-  if (item.login) {
-    result.login = {
-      username: item.login.username ?? null,
-      password: expose ? item.login.password : MASKED,
-      totp: expose ? (item.login.totp ? "present" : null) : MASKED,
-      uris: item.login.uris?.map((u) => u.uri) ?? [],
-    };
-  }
-
-  if (item.card) {
-    result.card = {
-      cardholderName: item.card.cardholderName ?? null,
-      brand: item.card.brand ?? null,
-      number: expose ? item.card.number : MASKED,
-      expMonth: item.card.expMonth ?? null,
-      expYear: item.card.expYear ?? null,
-      code: expose ? item.card.code : MASKED,
-    };
-  }
-
-  if (item.identity) {
-    result.identity = {
-      firstName: item.identity.firstName ?? null,
-      lastName: item.identity.lastName ?? null,
-      email: item.identity.email ?? null,
-      phone: item.identity.phone ?? null,
-    };
-  }
-
-  // Custom fields: mask hidden fields unless exposed
-  if (item.fields && item.fields.length > 0) {
-    result.fields = item.fields.map((f) => ({
-      name: f.name,
-      value: f.type === 1 /* hidden */ && !expose ? MASKED : f.value,
-      type: ["text", "hidden", "boolean"][f.type] ?? "unknown",
-    }));
-  }
-
-  // Notes: include presence indicator but not content unless exposed
-  if (item.notes) {
-    result.notes = expose ? item.notes : "(has notes - use expose:true to view)";
-  }
-
-  return result;
-}
-
-function formatItemSummary(item: BwItem): string {
-  const parts = [item.name];
-  if (item.login?.username) {
-    parts.push(`(${item.login.username})`);
-  }
-  if (item.login?.uris?.[0]) {
-    parts.push(`- ${item.login.uris[0].uri}`);
-  }
-  return parts.join(" ");
 }
 
 // ── Extension ────────────────────────────────────────────────────────────────
 
 export default function (pi: ExtensionAPI) {
-  let vaultStatus: string = "unknown";
-
   function updateStatus(ctx: ExtensionContext) {
     if (!ctx.hasUI) return;
 
-    if (vaultStatus === "unlocked") {
-      ctx.ui.setStatus("bitwarden", ctx.ui.theme.fg("success", "bw:unlocked"));
-    } else if (vaultStatus === "locked") {
-      ctx.ui.setStatus("bitwarden", ctx.ui.theme.fg("warning", "bw:locked"));
-    } else if (vaultStatus === "unauthenticated") {
-      ctx.ui.setStatus("bitwarden", ctx.ui.theme.fg("error", "bw:logged-out"));
+    if (!isAvailable()) {
+      ctx.ui.setStatus("bitwarden", ctx.ui.theme.fg("error", "rbw:missing"));
+      return;
+    }
+
+    if (isUnlocked()) {
+      ctx.ui.setStatus("bitwarden", ctx.ui.theme.fg("success", "rbw:unlocked"));
     } else {
-      ctx.ui.setStatus("bitwarden", undefined);
+      ctx.ui.setStatus("bitwarden", ctx.ui.theme.fg("warning", "rbw:locked"));
     }
   }
 
@@ -217,53 +110,27 @@ export default function (pi: ExtensionAPI) {
     handler: async (args, ctx) => {
       if (!ctx.hasUI) return;
 
+      if (!isAvailable()) {
+        ctx.ui.notify(
+          "rbw is not installed. Install from https://github.com/doy/rbw",
+          "error",
+        );
+        return;
+      }
+
       const arg = args.trim().toLowerCase();
 
       if (arg === "unlock") {
-        const status = getVaultStatus();
-
-        if (status === "unauthenticated") {
-          ctx.ui.notify(
-            "Not logged in to Bitwarden. Run `bw login` in your terminal first.",
-            "error",
-          );
-          return;
-        }
-
-        if (status === "unlocked") {
+        if (isUnlocked()) {
           ctx.ui.notify("Vault is already unlocked.", "info");
           return;
         }
 
-        // Prompt for master password securely
-        const password = await ctx.ui.prompt("Enter Bitwarden master password:", {
-          secret: true,
-        });
-
-        if (!password) {
-          ctx.ui.notify("Unlock cancelled.", "info");
-          return;
-        }
-
         try {
-          // bw unlock outputs the session key
-          const output = execSync(
-            `bw unlock --raw`,
-            {
-              encoding: "utf-8",
-              stdio: ["pipe", "pipe", "pipe"],
-              input: password,
-              timeout: 30_000,
-            },
-          );
-
-          const sessionToken = output.trim();
-          if (sessionToken) {
-            process.env[SESSION_ENV_KEY] = sessionToken;
-            vaultStatus = "unlocked";
-            updateStatus(ctx);
-            ctx.ui.notify("Vault unlocked.", "info");
-          }
+          // rbw unlock prompts for master password via pinentry/agent
+          await runRbw(["unlock"]);
+          updateStatus(ctx);
+          ctx.ui.notify("Vault unlocked.", "info");
         } catch (err) {
           ctx.ui.notify(
             `Unlock failed: ${err instanceof Error ? err.message : err}`,
@@ -275,9 +142,7 @@ export default function (pi: ExtensionAPI) {
 
       if (arg === "lock") {
         try {
-          await runBw(["lock"]);
-          delete process.env[SESSION_ENV_KEY];
-          vaultStatus = "locked";
+          await runRbw(["lock"]);
           updateStatus(ctx);
           ctx.ui.notify("Vault locked.", "info");
         } catch (err) {
@@ -291,7 +156,7 @@ export default function (pi: ExtensionAPI) {
 
       if (arg === "sync") {
         try {
-          await runBw(["sync"]);
+          await runRbw(["sync"]);
           ctx.ui.notify("Vault synced.", "info");
         } catch (err) {
           ctx.ui.notify(
@@ -303,14 +168,13 @@ export default function (pi: ExtensionAPI) {
       }
 
       // Default: show status
-      vaultStatus = getVaultStatus();
       updateStatus(ctx);
-
+      const status = isUnlocked() ? "unlocked" : "locked";
       const lines = [
-        `Bitwarden vault: ${vaultStatus}`,
+        `Bitwarden vault: ${status}`,
         "",
         "Commands:",
-        "  /bw unlock  - Unlock vault",
+        "  /bw unlock  - Unlock vault (via rbw-agent pinentry)",
         "  /bw lock    - Lock vault",
         "  /bw sync    - Sync with server",
       ];
@@ -322,137 +186,155 @@ export default function (pi: ExtensionAPI) {
 
   pi.registerTool({
     name: "bw_get",
-    description: `Retrieve a Bitwarden vault item by name, ID, or URI.
+    description: `Retrieve a Bitwarden vault item by name or folder/name.
 
-Returns item metadata (name, username, URIs). Passwords are masked by default.
-Set expose=true to reveal sensitive fields (requires user confirmation).
+By default returns only the username. Set field to retrieve a specific field.
+Sensitive fields (password, totp, notes) require user confirmation.
 
-The vault must be unlocked first (use /bw unlock command).`,
+The vault must be unlocked first (use /bw unlock command).
+
+Examples:
+  bw_get(name: "github.com") -> returns username
+  bw_get(name: "github.com", field: "password") -> returns password (with confirmation)
+  bw_get(name: "GitHub", folder: "Work") -> returns username from Work folder
+  bw_get(name: "AWS", field: "totp") -> returns TOTP code (with confirmation)`,
     parameters: Type.Object({
-      query: Type.String({
-        description: "Item name, UUID, or URI to search for",
+      name: Type.String({
+        description: "Item name or URI to search for",
       }),
-      expose: Type.Optional(
-        Type.Boolean({
+      folder: Type.Optional(
+        Type.String({
+          description: "Folder name to narrow the search (for duplicate item names)",
+        }),
+      ),
+      field: Type.Optional(
+        Type.String({
           description:
-            "If true, include password/TOTP/card number fields (requires user confirmation). Default: false.",
+            "Specific field to retrieve: 'username', 'password', 'totp', 'notes', or a custom field name. Default: 'username'.",
         }),
       ),
     }),
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
       if (!isAvailable()) {
         return {
-          content: [
-            {
-              type: "text",
-              text: "Bitwarden CLI (bw) is not installed or not in PATH. Install from https://bitwarden.com/help/cli/",
-            },
-          ],
+          content: [{
+            type: "text",
+            text: "rbw is not installed. Install from https://github.com/doy/rbw",
+          }],
           isError: true,
         };
       }
 
-      const status = getVaultStatus();
-      if (status !== "unlocked") {
+      if (!isUnlocked()) {
         return {
-          content: [
-            {
-              type: "text",
-              text: `Vault is ${status}. Use /bw unlock to unlock it first.`,
-            },
-          ],
+          content: [{
+            type: "text",
+            text: "Vault is locked. Use /bw unlock to unlock it first.",
+          }],
           isError: true,
         };
       }
 
-      const wantsExpose = params.expose === true;
+      const field = params.field ?? "username";
+      const sensitiveFields = ["password", "totp", "notes"];
+      const isSensitive = sensitiveFields.includes(field.toLowerCase());
 
-      // If exposing sensitive data, require user confirmation
-      if (wantsExpose && ctx.hasUI) {
+      // Require user confirmation for sensitive fields
+      if (isSensitive && ctx.hasUI) {
         const choice = await ctx.ui.select(
-          `Expose sensitive fields for query "${params.query}"?\n\nThis will reveal passwords, TOTP secrets, and card numbers to the agent.`,
-          ["Yes, expose this time", "No, keep masked"],
+          `Expose "${field}" for "${params.name}"?\n\nThis will reveal the ${field} to the agent.`,
+          ["Yes, expose this time", "No, deny access"],
         );
 
         if (choice !== "Yes, expose this time") {
           return {
-            content: [
-              {
-                type: "text",
-                text: "User denied access to sensitive fields. Item returned with masked values.",
-              },
-            ],
+            content: [{
+              type: "text",
+              text: `User denied access to "${field}" field.`,
+            }],
           };
         }
       }
 
       try {
-        const output = await runBw(["get", "item", params.query]);
-        const item: BwItem = JSON.parse(output);
-        const sanitized = sanitizeItem(item, wantsExpose);
+        const args = ["get"];
 
-        return {
-          content: [
-            {
-              type: "text",
-              text: JSON.stringify(sanitized, null, 2),
-            },
-          ],
-        };
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-
-        if (msg.includes("Not found")) {
+        // For password (default rbw get behavior) vs specific fields
+        if (field === "password") {
+          args.push(params.name);
+        } else if (field === "username") {
+          args.push("--full", params.name);
+        } else if (field === "totp") {
+          // rbw code generates TOTP
+          const codeArgs = ["code", params.name];
+          if (params.folder) {
+            codeArgs.push("--folder", params.folder);
+          }
+          const code = await runRbw(codeArgs);
           return {
-            content: [
-              {
-                type: "text",
-                text: `No item found matching "${params.query}".`,
-              },
-            ],
-            isError: true,
+            content: [{ type: "text", text: `TOTP code: ${code}` }],
           };
+        } else if (field === "notes") {
+          args.push("--full", params.name);
+        } else {
+          // Custom field
+          args.push("--field", field, params.name);
         }
 
-        if (msg.includes("More than one")) {
-          // Multiple matches - list them
-          try {
-            const listOutput = await runBw([
-              "list",
-              "items",
-              "--search",
-              params.query,
-            ]);
-            const items: BwItem[] = JSON.parse(listOutput);
-            const summaries = items
-              .slice(0, 10)
-              .map((i) => `- ${formatItemSummary(i)} (id: ${i.id})`)
-              .join("\n");
+        if (params.folder) {
+          args.push("--folder", params.folder);
+        }
+
+        const output = await runRbw(args);
+
+        if (field === "username" || field === "notes") {
+          // --full output format: "password\nusername: value\nURI: value\nNotes:\nline1\nline2"
+          const lines = output.split("\n");
+
+          if (field === "username") {
+            const userLine = lines.find((l) => l.startsWith("Username: "));
+            const username = userLine
+              ? userLine.replace("Username: ", "")
+              : "(no username)";
+
+            // Also extract URIs for context
+            const uris = lines
+              .filter((l) => l.startsWith("URI: "))
+              .map((l) => l.replace("URI: ", ""));
+
+            const parts = [`Username: ${username}`];
+            if (uris.length > 0) {
+              parts.push(`URIs: ${uris.join(", ")}`);
+            }
+            parts.push(`Password: ${MASKED}`);
 
             return {
-              content: [
-                {
-                  type: "text",
-                  text: `Multiple items match "${params.query}". Use a more specific query or an item ID:\n\n${summaries}`,
-                },
-              ],
-              isError: true,
+              content: [{ type: "text", text: parts.join("\n") }],
             };
-          } catch {
+          }
+
+          if (field === "notes") {
+            const notesIdx = lines.findIndex((l) => l === "Notes:");
+            if (notesIdx === -1) {
+              return {
+                content: [{ type: "text", text: "(no notes)" }],
+              };
+            }
+            const notes = lines.slice(notesIdx + 1).join("\n");
             return {
-              content: [
-                {
-                  type: "text",
-                  text: `Multiple items match "${params.query}". Use a more specific name or the item's UUID.`,
-                },
-              ],
-              isError: true,
+              content: [{ type: "text", text: notes || "(empty notes)" }],
             };
           }
         }
 
+        // For password and custom fields, output is the raw value
         return {
-          content: [{ type: "text", text: `Bitwarden error: ${msg}` }],
+          content: [{ type: "text", text: output }],
+        };
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        return {
+          content: [{ type: "text", text: `rbw error: ${msg}` }],
           isError: true,
         };
       }
@@ -461,140 +343,100 @@ The vault must be unlocked first (use /bw unlock command).`,
 
   pi.registerTool({
     name: "bw_list",
-    description: `List Bitwarden vault items matching a search query.
+    description: `List Bitwarden vault items, optionally filtered by a search term.
 
-Returns item summaries (name, username, URIs) without any sensitive fields.
-Use bw_get with a specific item name or ID to retrieve full details.
+Returns item names only (no sensitive data). Use bw_get to retrieve specific fields.
 
 The vault must be unlocked first (use /bw unlock command).`,
     parameters: Type.Object({
       search: Type.Optional(
-        Type.String({ description: "Search term to filter items" }),
+        Type.String({ description: "Search term to filter items (case-insensitive substring match)" }),
       ),
       folder: Type.Optional(
         Type.String({ description: "Filter by folder name" }),
-      ),
-      collection: Type.Optional(
-        Type.String({ description: "Filter by collection name" }),
       ),
     }),
     async execute(_toolCallId, params, _signal, _onUpdate, _ctx) {
       if (!isAvailable()) {
         return {
-          content: [
-            {
-              type: "text",
-              text: "Bitwarden CLI (bw) is not installed or not in PATH.",
-            },
-          ],
+          content: [{
+            type: "text",
+            text: "rbw is not installed. Install from https://github.com/doy/rbw",
+          }],
           isError: true,
         };
       }
 
-      const status = getVaultStatus();
-      if (status !== "unlocked") {
+      if (!isUnlocked()) {
         return {
-          content: [
-            {
-              type: "text",
-              text: `Vault is ${status}. Use /bw unlock to unlock it first.`,
-            },
-          ],
+          content: [{
+            type: "text",
+            text: "Vault is locked. Use /bw unlock to unlock it first.",
+          }],
           isError: true,
         };
       }
 
       try {
-        const args = ["list", "items"];
-
-        if (params.search) {
-          args.push("--search", params.search);
-        }
+        const args = ["list"];
 
         if (params.folder) {
-          // Resolve folder name to ID
-          const foldersOutput = await runBw(["list", "folders"]);
-          const folders = JSON.parse(foldersOutput) as {
-            id: string;
-            name: string;
-          }[];
-          const folder = folders.find(
-            (f) => f.name.toLowerCase() === params.folder!.toLowerCase(),
-          );
-          if (folder) {
-            args.push("--folderid", folder.id);
-          } else {
-            return {
-              content: [
-                {
-                  type: "text",
-                  text: `Folder "${params.folder}" not found. Available folders: ${folders.map((f) => f.name).join(", ")}`,
-                },
-              ],
-              isError: true,
-            };
-          }
+          args.push("--fields", "name,user,folder");
+        } else {
+          args.push("--fields", "name,user,folder");
         }
 
-        if (params.collection) {
-          const collectionsOutput = await runBw(["list", "collections"]);
-          const collections = JSON.parse(collectionsOutput) as {
-            id: string;
-            name: string;
-          }[];
-          const collection = collections.find(
-            (c) =>
-              c.name.toLowerCase() === params.collection!.toLowerCase(),
-          );
-          if (collection) {
-            args.push("--collectionid", collection.id);
-          } else {
-            return {
-              content: [
-                {
-                  type: "text",
-                  text: `Collection "${params.collection}" not found.`,
-                },
-              ],
-              isError: true,
-            };
-          }
+        const output = await runRbw(args);
+        let lines = output.split("\n").filter((l) => l.trim());
+
+        // Apply folder filter
+        if (params.folder) {
+          const folderLower = params.folder.toLowerCase();
+          lines = lines.filter((line) => {
+            const parts = line.split("\t");
+            const folder = parts[2]?.trim().toLowerCase() ?? "";
+            return folder === folderLower;
+          });
         }
 
-        const output = await runBw(args);
-        const items: BwItem[] = JSON.parse(output);
+        // Apply search filter
+        if (params.search) {
+          const searchLower = params.search.toLowerCase();
+          lines = lines.filter((line) => line.toLowerCase().includes(searchLower));
+        }
 
-        if (items.length === 0) {
+        if (lines.length === 0) {
           return {
-            content: [
-              {
-                type: "text",
-                text: "No items found matching your criteria.",
-              },
-            ],
+            content: [{ type: "text", text: "No items found matching your criteria." }],
           };
         }
 
-        const lines = [
-          `Found ${items.length} item(s):`,
-          "",
-          ...items.slice(0, 50).map(
-            (item, i) =>
-              `${i + 1}. ${formatItemSummary(item)}`,
-          ),
-        ];
+        // Format output
+        const formatted = lines.slice(0, 50).map((line, i) => {
+          const parts = line.split("\t");
+          const name = parts[0] ?? "";
+          const user = parts[1] ?? "";
+          const folder = parts[2] ?? "";
+          const display = user ? `${name} (${user})` : name;
+          return folder
+            ? `${i + 1}. ${display} [${folder}]`
+            : `${i + 1}. ${display}`;
+        });
 
-        if (items.length > 50) {
-          lines.push(`\n... and ${items.length - 50} more. Refine your search.`);
+        const header = `Found ${lines.length} item(s):`;
+        const result = [header, "", ...formatted];
+
+        if (lines.length > 50) {
+          result.push(`\n... and ${lines.length - 50} more. Refine your search.`);
         }
 
         return {
-          content: [{ type: "text", text: lines.join("\n") }],
+          content: [{ type: "text", text: result.join("\n") }],
         };
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         return {
-          content: [{ type: "text", text: `Bitwarden error: ${msg}` }],
+          content: [{ type: "text", text: `rbw error: ${msg}` }],
           isError: true,
         };
       }
@@ -604,46 +446,30 @@ The vault must be unlocked first (use /bw unlock command).`,
   // ── Lifecycle ─────────────────────────────────────────────────────────────
 
   pi.on("session_start", async (_event, ctx) => {
-    if (!isAvailable()) {
-      if (ctx.hasUI) {
-        ctx.ui.setStatus("bitwarden", ctx.ui.theme.fg("error", "bw:missing"));
-      }
-      return;
-    }
-
-    vaultStatus = getVaultStatus();
     updateStatus(ctx);
   });
 
-  pi.on("session_shutdown", async () => {
-    // Auto-lock vault and clear session token on shutdown
-    if (getSession()) {
-      try {
-        execSync("bw lock", {
-          encoding: "utf-8",
-          stdio: ["pipe", "pipe", "pipe"],
-          timeout: 10_000,
-        });
-      } catch {
-        // Best-effort lock
-      }
-      delete process.env[SESSION_ENV_KEY];
-    }
-  });
+  // ── Safety: block direct rbw/bw usage in bash ─────────────────────────────
 
-  // ── Safety: block bw commands in bash ──────────────────────────────────────
-
-  pi.on("tool_call", async (event, ctx) => {
+  pi.on("tool_call", async (event, _ctx) => {
     if (event.toolName !== "bash") return undefined;
 
     const command = event.input.command as string;
 
-    // Block direct bw CLI usage in bash to prevent session token leakage
-    if (/\bbw\s+(get|list|unlock|login|sync|export|encode|create|edit|delete|restore|move|confirm|share|send)\b/.test(command)) {
+    // Block direct rbw/bw CLI access to prevent secrets appearing in tool results
+    if (/\brbw\s+(get|code)\b/.test(command)) {
       return {
         block: true,
         reason:
-          "Direct bw CLI access is blocked for security. Use the bw_get and bw_list tools instead, which handle session tokens securely and mask sensitive data.",
+          "Direct rbw credential access in bash is blocked. Use the bw_get tool instead, which masks sensitive fields and requires user confirmation.",
+      };
+    }
+
+    if (/\bbw\s+(get|list|unlock|login|export)\b/.test(command)) {
+      return {
+        block: true,
+        reason:
+          "Direct bw CLI access is blocked. Use the bw_get and bw_list tools instead.",
       };
     }
 
