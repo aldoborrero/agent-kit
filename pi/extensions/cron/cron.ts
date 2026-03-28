@@ -376,34 +376,73 @@ export default function cronLoopExtension(pi: ExtensionAPI) {
 		tasks.clear();
 	});
 
-	// /cron — schedule a recurring prompt
+	// /cron — unified command
 	pi.registerCommand("cron", {
-		description: "Schedule a recurring prompt (e.g., /cron 5m check deploy status)",
+		description: "Schedule, list, or delete recurring prompts",
 		handler: async (args, ctx) => {
 			latestCtx = ctx;
 			const input = args.trim();
+
+			// /cron — no args, show status or help
 			if (!input) {
-				ctx.ui.notify(
-					"Usage: /cron [interval] <prompt>\n\n" +
-					"Examples:\n" +
-					"  /cron 5m check if the deployment finished\n" +
-					"  /cron 2h run integration tests\n" +
-					"  /cron check deploy every 30m\n" +
-					"  /cron check the build  (defaults to 10m)\n\n" +
-					"Intervals: Ns, Nm, Nh, Nd",
-					"info",
-				);
+				if (tasks.size === 0) {
+					ctx.ui.notify(
+						"No scheduled tasks.\n\n" +
+						"Usage:\n" +
+						"  /cron 5m check deploy    schedule a task\n" +
+						"  /cron list               show all tasks\n" +
+						"  /cron delete <id>        cancel a task",
+						"info",
+					);
+				} else {
+					showList(ctx);
+				}
 				return;
 			}
 
+			// /cron list
+			if (input === "list" || input === "ls") {
+				showList(ctx);
+				return;
+			}
+
+			// /cron delete <id>  |  /cron rm <id>  |  /cron stop <id>
+			const deleteMatch = input.match(/^(?:delete|rm|stop)\s+(\S+)/);
+			if (deleteMatch) {
+				const id = deleteMatch[1];
+				const task = tasks.get(id);
+				if (task) {
+					task.cron.stop();
+					tasks.delete(id);
+					updateStatus();
+					ctx.ui.notify(`Task ${id} deleted`, "info");
+					if (tasks.size === 0) stopTimer();
+				} else {
+					ctx.ui.notify(`Task ${id} not found. Use /cron list`, "error");
+				}
+				return;
+			}
+
+			// /cron clear — delete all
+			if (input === "clear" || input === "clear all") {
+				for (const task of tasks.values()) task.cron.stop();
+				const count = tasks.size;
+				tasks.clear();
+				stopTimer();
+				updateStatus();
+				ctx.ui.notify(`Deleted ${count} task(s)`, "info");
+				return;
+			}
+
+			// /cron <interval> <prompt> — schedule
 			if (tasks.size >= MAX_TASKS) {
-				ctx.ui.notify(`Maximum ${MAX_TASKS} tasks. Delete some with /cron-delete`, "error");
+				ctx.ui.notify(`Maximum ${MAX_TASKS} tasks. Use /cron delete <id> or /cron clear`, "error");
 				return;
 			}
 
 			const parsed = parseInput(input);
 			if (!parsed || !parsed.prompt) {
-				ctx.ui.notify("Please provide a prompt. Usage: /cron [interval] <prompt>", "error");
+				ctx.ui.notify("Could not parse. Usage: /cron [interval] <prompt>", "error");
 				return;
 			}
 
@@ -413,10 +452,9 @@ export default function cronLoopExtension(pi: ExtensionAPI) {
 			updateStatus();
 
 			const nextRun = task.cron.nextRun();
-			let msg = `Scheduled recurring task ${task.id}\n` +
-				`Cron: ${parsed.cronExpr} (${parsed.humanLabel})\n` +
-				`Next fire: ${nextRun ? nextRun.toLocaleTimeString() : "—"}\n` +
-				`Auto-expires in ${RECURRING_EXPIRY_DAYS} days. Cancel with /cron-delete ${task.id}`;
+			let msg = `Scheduled ${task.id} (${parsed.humanLabel})\n` +
+				`Next: ${nextRun ? nextRun.toLocaleTimeString() : "—"}\n` +
+				`Expires in ${RECURRING_EXPIRY_DAYS} days. /cron delete ${task.id} to cancel.`;
 
 			if (parsed.rounded) {
 				msg = `${parsed.rounded}\n\n${msg}`;
@@ -424,7 +462,7 @@ export default function cronLoopExtension(pi: ExtensionAPI) {
 
 			ctx.ui.notify(msg, "info");
 
-			// Execute immediately (don't wait for first cron fire)
+			// Execute immediately
 			pi.sendMessage(
 				{
 					customType: "cron",
@@ -436,51 +474,20 @@ export default function cronLoopExtension(pi: ExtensionAPI) {
 		},
 	});
 
-	// /cron-list
-	pi.registerCommand("cron-list", {
-		description: "List all scheduled cron tasks",
-		handler: async (_args, ctx) => {
-			latestCtx = ctx;
-			if (tasks.size === 0) {
-				ctx.ui.notify("No scheduled tasks", "info");
-				return;
-			}
+	function showList(ctx: ExtensionContext): void {
+		if (tasks.size === 0) {
+			ctx.ui.notify("No scheduled tasks", "info");
+			return;
+		}
 
-			const lines = Array.from(tasks.values()).map((t) => {
-				const next = t.cron.nextRun();
-				const nextStr = next ? next.toLocaleTimeString() : "—";
-				const type = t.recurring ? "recurring" : "one-shot";
-				return `${t.id}  ${t.cronExpr.padEnd(15)}  ${type.padEnd(9)}  fired ${String(t.fireCount).padStart(3)}x  next ${nextStr}\n    "${t.prompt}"`;
-			});
+		const lines = Array.from(tasks.values()).map((t) => {
+			const next = t.cron.nextRun();
+			const nextStr = next ? next.toLocaleTimeString() : "—";
+			return `${t.id}  ${t.humanLabel.padEnd(6)}  fired ${String(t.fireCount).padStart(3)}x  next ${nextStr}\n  ${t.prompt}`;
+		});
 
-			ctx.ui.notify(`Scheduled tasks (${tasks.size}):\n\n${lines.join("\n\n")}`, "info");
-		},
-	});
-
-	// /cron-delete
-	pi.registerCommand("cron-delete", {
-		description: "Delete a scheduled cron task by ID",
-		handler: async (args, ctx) => {
-			latestCtx = ctx;
-			const id = args.trim();
-			if (!id) {
-				ctx.ui.notify("Usage: /cron-delete <task-id>", "error");
-				return;
-			}
-
-			const task = tasks.get(id);
-			if (task) {
-				task.cron.stop();
-				tasks.delete(id);
-				updateStatus();
-				ctx.ui.notify(`Task ${id} deleted`, "info");
-
-				if (tasks.size === 0) stopTimer();
-			} else {
-				ctx.ui.notify(`Task ${id} not found. Use /cron-list to see tasks.`, "error");
-			}
-		},
-	});
+		ctx.ui.notify(`Scheduled tasks (${tasks.size}):\n\n${lines.join("\n\n")}`, "info");
+	}
 }
 
 function formatRelative(timestamp: number): string {
