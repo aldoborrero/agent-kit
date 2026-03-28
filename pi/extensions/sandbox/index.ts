@@ -201,21 +201,20 @@ export default function (pi: ExtensionAPI) {
 		default: false,
 	});
 
-	const localCwd = process.cwd();
-	const localBash = createBashTool(localCwd);
-
+	let projectCwd = process.cwd();
+	let cachedBash = createBashTool(projectCwd);
 	let sandboxEnabled = false;
 	let sandboxInitialized = false;
 
 	pi.registerTool({
-		...localBash,
+		...cachedBash,
 		label: "bash (sandboxed)",
 		async execute(id, params, signal, onUpdate, _ctx) {
 			if (!sandboxEnabled || !sandboxInitialized) {
-				return localBash.execute(id, params, signal, onUpdate);
+				return cachedBash.execute(id, params, signal, onUpdate);
 			}
 
-			const sandboxedBash = createBashTool(localCwd, {
+			const sandboxedBash = createBashTool(projectCwd, {
 				operations: createSandboxedBashOps(),
 			});
 			return sandboxedBash.execute(id, params, signal, onUpdate);
@@ -228,6 +227,8 @@ export default function (pi: ExtensionAPI) {
 	});
 
 	pi.on("session_start", async (_event, ctx) => {
+		projectCwd = ctx.cwd;
+		cachedBash = createBashTool(projectCwd);
 		const noSandbox = pi.getFlag("no-sandbox") as boolean;
 
 		if (noSandbox) {
