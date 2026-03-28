@@ -319,6 +319,8 @@ export default function walkieExtension(pi: ExtensionAPI) {
   let filesChanged = 0;
   /** message_id of the inbound Telegram message that triggered the current run */
   let runTriggerMessageId: number | null = null;
+  /** message_id of a followUp message queued during a run — promoted to runTriggerMessageId at the next agent_start */
+  let nextRunTriggerMessageId: number | null = null;
   /** Current activity label shown in heartbeat messages (thinking / tool / generic) */
   let agentPhase = "Processing request...";
 
@@ -346,6 +348,7 @@ export default function walkieExtension(pi: ExtensionAPI) {
     const lastId = pending.items[pending.items.length - 1]!.messageId;
 
     if (isStreaming) {
+      nextRunTriggerMessageId = lastId;
       pi.sendUserMessage(merged, { deliverAs: "followUp" });
     } else {
       runTriggerMessageId = lastId;
@@ -618,8 +621,10 @@ export default function walkieExtension(pi: ExtensionAPI) {
         await tg.editMessageReplyMarkup(config.botToken, config.chatId, interaction.messageId).catch(() => {});
       }
       if (isStreaming) {
+        nextRunTriggerMessageId = cq.message?.message_id ?? null;
         pi.sendUserMessage(opt.submit_text, { deliverAs: "followUp" });
       } else {
+        runTriggerMessageId = cq.message?.message_id ?? null;
         pi.sendUserMessage(opt.submit_text);
       }
     } else {
@@ -756,6 +761,7 @@ export default function walkieExtension(pi: ExtensionAPI) {
         { type: "image" as const, data: buf.toString("base64"), mimeType: "image/jpeg" },
       ];
       if (isStreaming) {
+        nextRunTriggerMessageId = msg.message_id;
         pi.sendUserMessage(content, { deliverAs: "followUp" });
       } else {
         runTriggerMessageId = msg.message_id;
@@ -789,6 +795,7 @@ export default function walkieExtension(pi: ExtensionAPI) {
       await sendPlain(`🎤 ${transcription.trim()}`).catch(() => {});
       await tg.setMessageReaction(config.botToken, config.chatId, msg.message_id, "✅").catch(() => {});
       if (isStreaming) {
+        nextRunTriggerMessageId = msg.message_id;
         pi.sendUserMessage(transcription.trim(), { deliverAs: "followUp" });
       } else {
         runTriggerMessageId = msg.message_id;
@@ -891,8 +898,12 @@ export default function walkieExtension(pi: ExtensionAPI) {
     turnCount = 0;
     filesChanged = 0;
     agentPhase = "Processing request...";
-    // runTriggerMessageId is intentionally NOT reset here — it is set by
-    // handleUpdate before agent_start fires, so we must preserve it.
+    // Promote a followUp trigger when no direct trigger was set for this run
+    // (i.e. this run was queued via deliverAs:"followUp" during a previous run).
+    if (runTriggerMessageId === null) {
+      runTriggerMessageId = nextRunTriggerMessageId;
+    }
+    nextRunTriggerMessageId = null;
 
     if (!isActive(config)) return;
 
