@@ -335,12 +335,12 @@ export default function walkieExtension(pi: ExtensionAPI) {
     timer: ReturnType<typeof setTimeout>;
   }
 
-  const pendingText = new Map<number, PendingTextEntry>();
+  let pendingTextEntry: PendingTextEntry | null = null;
 
-  function flushPendingText(chatId: number): void {
-    const pending = pendingText.get(chatId);
-    if (!pending) return;
-    pendingText.delete(chatId);
+  function flushPendingText(): void {
+    if (!pendingTextEntry) return;
+    const pending = pendingTextEntry;
+    pendingTextEntry = null;
 
     const merged = pending.items.map(i => i.text).join("\n");
     const lastId = pending.items[pending.items.length - 1]!.messageId;
@@ -353,12 +353,11 @@ export default function walkieExtension(pi: ExtensionAPI) {
     }
   }
 
-  /** Discard any buffered text for this chat without injecting it. */
-  function cancelPendingText(chatId: number): void {
-    const pending = pendingText.get(chatId);
-    if (!pending) return;
-    clearTimeout(pending.timer);
-    pendingText.delete(chatId);
+  /** Discard any buffered text without injecting it. */
+  function cancelPendingText(): void {
+    if (!pendingTextEntry) return;
+    clearTimeout(pendingTextEntry.timer);
+    pendingTextEntry = null;
   }
 
   // ─── Pending inline keyboard interactions ────────────────────────────────
@@ -635,7 +634,7 @@ export default function walkieExtension(pi: ExtensionAPI) {
 
     switch (cmd) {
       case "/abort":
-        cancelPendingText(config.chatId);
+        cancelPendingText();
         await tg.sendMessage(config.botToken, config.chatId, "⛔ Abort signal sent.", topicOptions(config)).catch(() => {});
         if (isStreaming) {
           pi.sendUserMessage("Stop what you're doing and summarize what happened.", { deliverAs: "steer" });
@@ -732,18 +731,15 @@ export default function walkieExtension(pi: ExtensionAPI) {
   function injectText(text: string, messageId: number): void {
     tg.setMessageReaction(config.botToken, config.chatId, messageId, "👀").catch(() => {});
 
-    const chatId = config.chatId!;
-    const existing = pendingText.get(chatId);
-
-    if (existing) {
-      clearTimeout(existing.timer);
-      existing.items.push({ text, messageId });
-      existing.timer = setTimeout(() => flushPendingText(chatId), TEXT_DEBOUNCE_MS);
+    if (pendingTextEntry) {
+      clearTimeout(pendingTextEntry.timer);
+      pendingTextEntry.items.push({ text, messageId });
+      pendingTextEntry.timer = setTimeout(flushPendingText, TEXT_DEBOUNCE_MS);
     } else {
-      pendingText.set(chatId, {
+      pendingTextEntry = {
         items: [{ text, messageId }],
-        timer: setTimeout(() => flushPendingText(chatId), TEXT_DEBOUNCE_MS),
-      });
+        timer: setTimeout(flushPendingText, TEXT_DEBOUNCE_MS),
+      };
     }
   }
 
@@ -1031,8 +1027,7 @@ export default function walkieExtension(pi: ExtensionAPI) {
   pi.on("session_shutdown", async (_event, _ctx) => {
     stopPolling();
     stopTimers();
-    for (const { timer } of pendingText.values()) clearTimeout(timer);
-    pendingText.clear();
+    if (pendingTextEntry) { clearTimeout(pendingTextEntry.timer); pendingTextEntry = null; }
     if (isActive(config)) {
       await sendPlain("🔴 Pi session ended").catch(() => {});
     }
