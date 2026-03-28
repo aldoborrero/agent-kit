@@ -50,6 +50,7 @@
       "pi/extensions/skill-namespaces",
       "pi/extensions/subagent",
       "pi/extensions/together-provider",
+      "pi/extensions/bitwarden",
       "pi/extensions/voice",
       "pi/extensions/context",
       "pi/extensions/cron",
