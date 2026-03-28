@@ -17,9 +17,13 @@ import type { AssistantMessage, TextContent } from "@mariozechner/pi-ai";
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { Key } from "@mariozechner/pi-tui";
 import { extractTodoItems, isSafeCommand, markCompletedSteps, type TodoItem } from "./utils.js";
+import { existsSync, readFileSync, mkdirSync } from "node:fs";
+import { join } from "node:path";
+
+const PLAN_DIR = ".pi/plans";
 
 // Tools
-const PLAN_MODE_TOOLS = ["read", "bash", "grep", "find", "ls", "questionnaire"];
+const PLAN_MODE_TOOLS = ["read", "bash", "grep", "find", "ls", "edit", "write", "questionnaire", "subagent", "ast_grep", "exa_search", "brave_search", "github_search_code"];
 const NORMAL_MODE_TOOLS = ["read", "bash", "edit", "write"];
 
 // Type guard for assistant messages
@@ -39,6 +43,40 @@ export default function planModeExtension(pi: ExtensionAPI): void {
 	let planModeEnabled = false;
 	let executionMode = false;
 	let todoItems: TodoItem[] = [];
+	let currentPlanFile: string | null = null;
+
+	let projectDir = process.cwd(); // updated from ctx.cwd on session_start
+
+	function generatePlanFileName(): string {
+		const now = new Date();
+		const date = now.toISOString().slice(0, 10); // YYYY-MM-DD
+		const time = now.toTimeString().slice(0, 5).replace(":", ""); // HHMM
+		return `plan-${date}-${time}.md`;
+	}
+
+	function getPlanDir(): string {
+		return join(projectDir, PLAN_DIR);
+	}
+
+	function ensurePlanDir(): void {
+		const dir = getPlanDir();
+		if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+	}
+
+	function startNewPlan(): string {
+		ensurePlanDir();
+		const fileName = generatePlanFileName();
+		currentPlanFile = join(getPlanDir(), fileName);
+		return currentPlanFile;
+	}
+
+	function getPlanFileInfo(): string {
+		if (currentPlanFile && existsSync(currentPlanFile)) {
+			return `Your current plan file is ${currentPlanFile}. You can read it and make incremental edits using the edit tool.`;
+		}
+		const path = startNewPlan();
+		return `Create your plan at ${path} using the write tool.`;
+	}
 
 	pi.registerFlag("plan", {
 		description: "Start in plan mode (read-only exploration)",
@@ -80,7 +118,7 @@ export default function planModeExtension(pi: ExtensionAPI): void {
 
 		if (planModeEnabled) {
 			pi.setActiveTools(PLAN_MODE_TOOLS);
-			ctx.ui.notify(`Plan mode enabled. Tools: ${PLAN_MODE_TOOLS.join(", ")}`);
+			ctx.ui.notify("Plan mode enabled. Read-only exploration with subagent, search, and web tools.");
 		} else {
 			pi.setActiveTools(NORMAL_MODE_TOOLS);
 			ctx.ui.notify("Plan mode disabled. Full access restored.");
@@ -93,6 +131,7 @@ export default function planModeExtension(pi: ExtensionAPI): void {
 			enabled: planModeEnabled,
 			todos: todoItems,
 			executing: executionMode,
+			planFile: currentPlanFile,
 		});
 	}
 
@@ -118,16 +157,41 @@ export default function planModeExtension(pi: ExtensionAPI): void {
 		handler: async (ctx) => togglePlanMode(ctx),
 	});
 
-	// Block destructive bash commands in plan mode
+	// Block non-plan-file edits and destructive bash in plan mode
 	pi.on("tool_call", async (event) => {
-		if (!planModeEnabled || event.toolName !== "bash") return;
+		if (!planModeEnabled) return;
 
-		const command = event.input.command as string;
-		if (!isSafeCommand(command)) {
-			return {
-				block: true,
-				reason: `Plan mode: command blocked (not allowlisted). Use /plan to disable plan mode first.\nCommand: ${command}`,
-			};
+		// Block edit/write on any file other than the plan file
+		if (event.toolName === "edit" || event.toolName === "write") {
+			const targetPath = event.input.path as string;
+			if (!targetPath) return;
+
+			const planPath = currentPlanFile;
+			const resolvedTarget = targetPath.startsWith("/")
+				? targetPath
+				: join(projectDir, targetPath);
+
+			if (resolvedTarget !== planPath) {
+				return {
+					block: true,
+					reason: `Plan mode: can only edit the plan file at ${planPath}. Use /plan to disable plan mode first.`,
+				};
+			}
+
+			// Allow — ensure the .pi directory exists
+			ensurePlanDir();
+			return;
+		}
+
+		// Block destructive bash commands
+		if (event.toolName === "bash") {
+			const command = event.input.command as string;
+			if (!isSafeCommand(command)) {
+				return {
+					block: true,
+					reason: `Plan mode: command blocked (not allowlisted). Use /plan to disable plan mode first.\nCommand: ${command}`,
+				};
+			}
 		}
 	});
 
@@ -162,24 +226,62 @@ export default function planModeExtension(pi: ExtensionAPI): void {
 				message: {
 					customType: "plan-mode-context",
 					content: `[PLAN MODE ACTIVE]
-You are in plan mode - a read-only exploration mode for safe code analysis.
+Plan mode is active. You MUST NOT make any edits, run non-readonly tools, or make any changes to the system. This supersedes any other instructions you have received.
 
-Restrictions:
-- You can only use: read, bash, grep, find, ls, questionnaire
-- You CANNOT use: edit, write (file modifications are disabled)
-- Bash is restricted to an allowlist of read-only commands
+## Plan File
+${getPlanFileInfo()}
+You should build your plan incrementally by writing to or editing this file. This is the ONLY file you are allowed to edit — other than this you are only allowed to take READ-ONLY actions.
 
-Ask clarifying questions using the questionnaire tool.
-Use brave-search skill via bash for web research.
+## Workflow
 
-Create a detailed numbered plan under a "Plan:" header:
+### Phase 1: Explore
+Gain a comprehensive understanding of the codebase relevant to the task. Actively search for existing functions, utilities, and patterns that can be reused — avoid proposing new code when suitable implementations already exist.
+
+Launch scout subagents in parallel for fast exploration:
+- Use 1 scout when the task is isolated to known files or the user provided specific paths.
+- Use multiple scouts when the scope is uncertain, multiple areas are involved, or you need to understand existing patterns.
+- Give each scout a specific search focus (e.g. one for implementations, one for tests, one for related components).
+
+Start by quickly scanning a few key files to form an initial understanding. Don't explore exhaustively before engaging the user.
+
+### Phase 2: Design
+Launch a planner subagent with comprehensive context from Phase 1 (filenames, code paths, existing utilities found). For complex tasks, launch multiple planners with different perspectives (simplicity vs performance vs maintainability).
+
+Skip subagents only for truly trivial tasks (typo fixes, single-line changes, simple renames).
+
+### Phase 3: Review and Clarify
+Read the critical files identified by agents. Ensure the plan aligns with the user's original request.
+
+Ask clarifying questions using the questionnaire tool when needed. Question discipline:
+- Never ask what you could find by reading the code.
+- Batch related questions together.
+- Focus on things only the user can answer: requirements, preferences, tradeoffs, edge case priorities.
+
+### Phase 4: Final Plan
+Present your plan under a "Plan:" header. Rules:
+- Do NOT write a Context, Background, or Overview section. The user just told you what they want.
+- Do NOT restate the user's request. Do NOT write prose paragraphs.
+- List the paths of files to be modified and what changes in each (one bullet per file).
+- Reference existing functions to reuse, with file:line.
+- End with a single verification command.
+- Hard limit: 40 lines. If the plan is longer, delete prose — not file paths.
 
 Plan:
-1. First step description
-2. Second step description
+1. `path/to/file.ts` — description of change
+2. `path/to/other.ts` — description of change
 ...
+Verify: <command>
 
-Do NOT attempt to make changes - just describe what you would do.`,
+## Available tools
+
+- **subagent** — dispatch scout (fast recon, haiku) and planner (design, opus) agents
+- **read, bash, grep, find, ls** — direct exploration (bash restricted to read-only commands)
+- **ast_grep** — structural code search (functions, classes, imports)
+- **exa_search, brave_search** — web research (docs, articles, examples)
+- **github_search_code** — find code on GitHub
+- **questionnaire** — ask user structured questions
+
+Do NOT attempt to make changes — explore, design, and plan only.`,
 					display: false,
 				},
 			};
@@ -193,11 +295,13 @@ Do NOT attempt to make changes - just describe what you would do.`,
 					customType: "plan-execution-context",
 					content: `[EXECUTING PLAN - Full tool access enabled]
 
-Remaining steps:
+Plan file: ${currentPlanFile ?? "unknown"}
+Read the plan file for full context. Remaining steps:
 ${todoList}
 
-Execute each step in order.
-After completing a step, include a [DONE:n] tag in your response.`,
+Execute each step in order. After completing a step, include a [DONE:n] tag in your response.
+
+When all steps are done, run the verification command from the plan to confirm everything works. Do not claim completion without running verification.`,
 					display: false,
 				},
 			};
@@ -289,6 +393,7 @@ After completing a step, include a [DONE:n] tag in your response.`,
 
 	// Restore state on session start/resume
 	pi.on("session_start", async (_event, ctx) => {
+		projectDir = ctx.cwd;
 		if (pi.getFlag("plan") === true) {
 			planModeEnabled = true;
 		}
@@ -298,12 +403,13 @@ After completing a step, include a [DONE:n] tag in your response.`,
 		// Restore persisted state
 		const planModeEntry = entries
 			.filter((e: { type: string; customType?: string }) => e.type === "custom" && e.customType === "plan-mode")
-			.pop() as { data?: { enabled: boolean; todos?: TodoItem[]; executing?: boolean } } | undefined;
+			.pop() as { data?: { enabled: boolean; todos?: TodoItem[]; executing?: boolean; planFile?: string } } | undefined;
 
 		if (planModeEntry?.data) {
 			planModeEnabled = planModeEntry.data.enabled ?? planModeEnabled;
 			todoItems = planModeEntry.data.todos ?? todoItems;
 			executionMode = planModeEntry.data.executing ?? executionMode;
+			currentPlanFile = planModeEntry.data.planFile ?? currentPlanFile;
 		}
 
 		// On resume: re-scan messages to rebuild completion state
