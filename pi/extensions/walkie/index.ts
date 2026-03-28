@@ -547,7 +547,7 @@ export default function walkieExtension(pi: ExtensionAPI) {
 
         for (const update of updates) {
           offset = update.update_id + 1;
-          handleUpdate(update).catch(() => {});
+          handleUpdate(update).catch((err) => { console.error("[walkie] handleUpdate error:", err); });
         }
       } catch (err) {
         if (signal.aborted) break;
@@ -757,11 +757,15 @@ export default function walkieExtension(pi: ExtensionAPI) {
     const largest = msg.photo![msg.photo!.length - 1]!;
     try {
       const fileInfo = await tg.getFile(config.botToken, largest.file_id);
-      if (!fileInfo.file_path) return;
+      if (!fileInfo.file_path) {
+        await sendPlain("❌ Could not retrieve photo from Telegram (no file path returned).").catch(() => {});
+        return;
+      }
       const buf = await tg.downloadFile(config.botToken, fileInfo.file_path);
       const caption = (msg.caption ?? msg.text ?? "Image from Telegram").trim();
       const content = [
         { type: "text"  as const, text: caption },
+        // Telegram transcodes all photos to JPEG before delivery, so JPEG is always correct here.
         { type: "image" as const, data: buf.toString("base64"), mimeType: "image/jpeg" },
       ];
       if (isStreaming) {
@@ -771,8 +775,8 @@ export default function walkieExtension(pi: ExtensionAPI) {
         runTriggerMessageId = msg.message_id;
         pi.sendUserMessage(content);
       }
-    } catch {
-      // Image injection is best-effort
+    } catch (err) {
+      await sendPlain(`❌ Could not send photo: ${err instanceof Error ? err.message : String(err)}`).catch(() => {});
     }
   }
 
@@ -788,7 +792,10 @@ export default function walkieExtension(pi: ExtensionAPI) {
     }
     try {
       const fileInfo = await tg.getFile(config.botToken, msg.voice!.file_id);
-      if (!fileInfo.file_path) return;
+      if (!fileInfo.file_path) {
+        await sendPlain("❌ Could not retrieve voice message from Telegram (no file path returned).").catch(() => {});
+        return;
+      }
       const buf = await tg.downloadFile(config.botToken, fileInfo.file_path);
       const lang = voiceConfig.lang ?? "en";
       const transcription = await stt.transcribe(buf, lang, "", { mimeType: "audio/ogg", filename: "voice.ogg" });
@@ -846,9 +853,13 @@ export default function walkieExtension(pi: ExtensionAPI) {
     }
 
     // ── Content → inject into pi ──────────────────────────────────────────
-    if (text)          injectText(text, msg.message_id);
-    if (msg.photo?.length) await handlePhoto(msg);
-    if (msg.voice)         await handleVoice(msg);
+    if (text)                   injectText(text, msg.message_id);
+    else if (msg.photo?.length) await handlePhoto(msg);
+    else if (msg.voice)         await handleVoice(msg);
+    else {
+      // Document, sticker, video, etc. — let the user know rather than silently drop.
+      await sendPlain("⚠️ Unsupported message type — send text, a photo, or a voice message.").catch(() => {});
+    }
   }
 
   // ─── Pi Events ────────────────────────────────────────────────────────────
