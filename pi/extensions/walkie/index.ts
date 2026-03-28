@@ -619,6 +619,7 @@ export default function walkieExtension(pi: ExtensionAPI) {
   }
 
   async function handleCallbackQuery(cq: tg.TelegramCallbackQuery): Promise<void> {
+    if (!isConfigured(config)) return;
     await tg.answerCallbackQuery(config.botToken, cq.id).catch(() => {});
 
     if (!cq.data) return;
@@ -653,6 +654,7 @@ export default function walkieExtension(pi: ExtensionAPI) {
   }
 
   async function handleCommand(text: string): Promise<void> {
+    if (!isConfigured(config)) return;
     // Strip @BotName suffix used in group chats (e.g. /abort@MyBot → /abort)
     const rawCmd = text.split(/\s+/)[0]!;
     const cmd = rawCmd.includes("@") ? rawCmd.slice(0, rawCmd.indexOf("@")) : rawCmd;
@@ -697,7 +699,10 @@ export default function walkieExtension(pi: ExtensionAPI) {
         const levels = ["none", "low", "high"] as const;
         const current = getThinkingLevel();
         const idx = levels.indexOf(current as typeof levels[number]);
-        const next = levels[(idx + 1) % levels.length]!;
+        // Without the guard, an unrecognised level gives indexOf() === -1, so
+        // (-1 + 1) % 3 === 0 → "none", silently resetting instead of advancing.
+        // Math.max(0, idx) treats any unknown level as "none" and advances to "low".
+        const next = levels[(Math.max(0, idx) + 1) % levels.length]!;
         setThinkingLevel(next);
         await sendPlain(`🧠 Thinking: ${current} → ${next}`).catch(() => {});
         break;
@@ -726,6 +731,8 @@ export default function walkieExtension(pi: ExtensionAPI) {
 
       case "/stream":
         config.streaming = !config.streaming;
+        // Clear any peer-invalid suppression so the toggle acts as a manual reset.
+        if (config.streaming) config.draftSuppressedUntil = undefined;
         await persistConfig(config);
         if (lastCtx) updateStatus(lastCtx);
         await sendPlain(`📡 Streaming ${config.streaming ? "enabled ✅" : "disabled ❌"}`).catch(() => {});
@@ -1212,6 +1219,8 @@ export default function walkieExtension(pi: ExtensionAPI) {
         // ── Stream: toggle live draft preview ─────────────────────────────
         case "stream": {
           config.streaming = !config.streaming;
+          // Clear any peer-invalid suppression so re-enabling acts as a manual reset.
+          if (config.streaming) config.draftSuppressedUntil = undefined;
           await persistConfig(config);
           ctx.ui.notify(
             `Live draft streaming ${config.streaming ? "enabled (default)" : "disabled"}`,
