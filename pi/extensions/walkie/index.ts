@@ -199,9 +199,15 @@ Rules:
  * null choices if no valid block is found.
  */
 function parseChoicesBlock(text: string): { visibleText: string; choices: ChoiceOption[] | null } {
-  const marker = '{"v":1,"options":[';
-  const idx = text.lastIndexOf(marker);
-  if (idx === -1) return { visibleText: text, choices: null };
+  // Use a regex so we match the block regardless of whitespace around JSON punctuation
+  // (e.g. the model may produce `{"v": 1, "options": [` instead of the compact form).
+  // We scan for the LAST occurrence in case the model produces multiple candidate blocks.
+  const markerRe = /\{"v"\s*:\s*1\s*,\s*"options"\s*:\s*\[/g;
+  let lastMatch: RegExpExecArray | null = null;
+  let m: RegExpExecArray | null;
+  while ((m = markerRe.exec(text)) !== null) lastMatch = m;
+  if (!lastMatch) return { visibleText: text, choices: null };
+  const idx = lastMatch.index;
   try {
     const block = JSON.parse(text.slice(idx)) as { v: number; options: ChoiceOption[] };
     if (!Array.isArray(block.options)) return { visibleText: text, choices: null };
@@ -213,12 +219,21 @@ function parseChoicesBlock(text: string): { visibleText: string; choices: Choice
   }
 }
 
+/** Telegram's hard limit for the callback_data field on inline buttons. */
+const CALLBACK_DATA_MAX_BYTES = 64;
+
 function buildChoicesKeyboard(interactionId: number, options: ChoiceOption[]): tg.InlineKeyboardMarkup {
   return {
-    inline_keyboard: options.map(opt => [{
-      text: opt.label,
-      callback_data: `wk:${interactionId}:${opt.id}`,
-    }]),
+    inline_keyboard: options.map(opt => {
+      const prefix = `wk:${interactionId}:`;
+      // Truncate the id if the full callback_data would exceed 64 bytes (rare in practice
+      // since the system prompt shows single-letter ids, but enforced defensively).
+      let id = opt.id;
+      while (Buffer.byteLength(prefix + id, "utf8") > CALLBACK_DATA_MAX_BYTES && id.length > 1) {
+        id = id.slice(0, -1);
+      }
+      return [{ text: opt.label, callback_data: prefix + id }];
+    }),
   };
 }
 
@@ -611,7 +626,8 @@ export default function walkieExtension(pi: ExtensionAPI) {
     if (cq.data.startsWith("wk:")) {
       const parts = cq.data.split(":");
       const interactionId = Number(parts[1]);
-      const optionId = parts[2];
+      // Rejoin with ":" to handle any colons inside the id itself.
+      const optionId = parts.slice(2).join(":");
       if (!Number.isFinite(interactionId) || !optionId) return;
 
       const interaction = pendingInteractions.get(interactionId);
