@@ -13,8 +13,11 @@
  * Pi commands:
  *   /walkie          — toggle on/off
  *   /walkie setup    — enter pairing mode
+ *   /walkie start    — enable and start polling
+ *   /walkie stop     — disable and stop polling
  *   /walkie stream   — toggle draft streaming
  *   /walkie status   — show config
+ *   /walkie topic    — create a forum topic and bind this instance to it
  *
  * Telegram commands (from your phone):
  *   /abort    — stop agent run
@@ -34,7 +37,7 @@ import { basename, dirname, join } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { getAgentDir } from "@mariozechner/pi-coding-agent";
 import * as tg from "./telegram.js";
-import { createProvider, detectProvider, type STTProvider } from "../voice/providers.js";
+import { createProvider, detectProvider } from "../voice/providers.js";
 import {
   DRAFT_HEARTBEAT_INTERVAL_MS,
   type AgentStats,
@@ -293,7 +296,7 @@ function extractLastAssistantText(messages: unknown[]): string {
     const text = (msg.content ?? [])
       .filter(c => c.type === "text")
       .map(c => c.text ?? "")
-      .join("\n")
+      .join("\n\n")
       .trim();
     if (text) return text;
   }
@@ -1119,50 +1122,46 @@ export default function walkieExtension(pi: ExtensionAPI) {
       switch (sub) {
         // ── Setup: enter pairing mode ─────────────────────────────────────
         case "setup": {
-          {
-            const hint = config.botToken
-              ? `Current: ${config.botToken.slice(0, 12)}… — leave blank to keep, or enter a new token`
-              : "Enter your Telegram bot token from @BotFather";
-            const token = await ctx.ui.input("Bot Token", hint);
-            if (token === null) {
-              ctx.ui.notify("Setup cancelled", "info");
-              return;
-            }
-            const trimmed = token.trim();
-            if (trimmed) {
-              config.botToken = trimmed;
-              await persistConfig(config);
-            } else if (!config.botToken) {
-              ctx.ui.notify("No bot token provided — setup cancelled.", "warning");
-              return;
-            }
+          const hint = config.botToken
+            ? `Current: ${config.botToken.slice(0, 12)}… — leave blank to keep, or enter a new token`
+            : "Enter your Telegram bot token from @BotFather";
+          const token = await ctx.ui.input("Bot Token", hint);
+          if (token === null) {
+            ctx.ui.notify("Setup cancelled", "info");
+            return;
+          }
+          const trimmed = token.trim();
+          if (trimmed) {
+            config.botToken = trimmed;
+            await persistConfig(config);
+          } else if (!config.botToken) {
+            ctx.ui.notify("No bot token provided — setup cancelled.", "warning");
+            return;
           }
 
           // Optional: topic ID for forum-group multi-project routing
-          {
-            const currentTopic = config.topicId ? `Current: ${config.topicId}` : "none";
-            const topicHint = `Forum topic ID (message_thread_id) — leave blank for private chat / no topic. Current: ${currentTopic}`;
-            const topicInput = await ctx.ui.input("Topic ID (optional)", topicHint);
-            if (topicInput !== null) {
-              const tid = parseInt(topicInput.trim(), 10);
-              if (!isNaN(tid) && tid > 0) {
-                config.topicId = tid;
-              } else if (topicInput.trim() === "") {
-                // blank = keep existing or none
-              } else {
-                config.topicId = undefined; // clear if invalid
-              }
+          const currentTopic = config.topicId ? `Current: ${config.topicId}` : "none";
+          const topicHint = `Forum topic ID (message_thread_id) — leave blank for private chat / no topic. Current: ${currentTopic}`;
+          const topicInput = await ctx.ui.input("Topic ID (optional)", topicHint);
+          if (topicInput !== null) {
+            const tid = parseInt(topicInput.trim(), 10);
+            if (!isNaN(tid) && tid > 0) {
+              config.topicId = tid;
+            } else if (topicInput.trim() === "") {
+              // blank = keep existing or none
+            } else {
+              config.topicId = undefined; // clear if invalid
             }
+          }
 
-            // Topic name (shown in notifications)
-            if (config.topicId) {
-              const nameHint = config.topicName
-                ? `Current: ${config.topicName} — leave blank to keep`
-                : "Short project name shown in notifications (e.g. agent-kit)";
-              const nameInput = await ctx.ui.input("Project name (optional)", nameHint);
-              if (nameInput !== null && nameInput.trim()) {
-                config.topicName = nameInput.trim();
-              }
+          // Topic name (shown in notifications)
+          if (config.topicId) {
+            const nameHint = config.topicName
+              ? `Current: ${config.topicName} — leave blank to keep`
+              : "Short project name shown in notifications (e.g. agent-kit)";
+            const nameInput = await ctx.ui.input("Project name (optional)", nameHint);
+            if (nameInput !== null && nameInput.trim()) {
+              config.topicName = nameInput.trim();
             }
           }
 
