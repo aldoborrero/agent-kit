@@ -170,6 +170,7 @@ interface PendingInteraction {
 }
 
 const INTERACTION_TTL_MS = 15 * 60 * 1000; // 15 minutes
+const SETUP_MODE_TTL_MS  =  5 * 60 * 1000; //  5 minutes
 
 /**
  * System prompt appended when walkie is active so the agent knows how to
@@ -309,6 +310,8 @@ export default function walkieExtension(pi: ExtensionAPI) {
   let isStreaming = false;
   /** True after /walkie setup — next Telegram message claims chat_id + user_id */
   let setupMode = false;
+  /** Timer that expires setupMode after SETUP_MODE_TTL_MS if no pairing message arrives */
+  let setupModeTimer: ReturnType<typeof setTimeout> | null = null;
   /** Stored ctx for abort() calls from polling loop */
   let lastCtx: ExtensionContext | null = null;
 
@@ -593,6 +596,7 @@ export default function walkieExtension(pi: ExtensionAPI) {
     config.allowedUserId = msg.from!.id;
     config.enabled = true;
     setupMode = false;
+    if (setupModeTimer) { clearTimeout(setupModeTimer); setupModeTimer = null; }
     await persistConfig(config);
     if (lastCtx) updateStatus(lastCtx);
     await registerBotCommands(config.botToken!, config.chatId);
@@ -1038,6 +1042,7 @@ export default function walkieExtension(pi: ExtensionAPI) {
   pi.on("session_shutdown", async (_event, _ctx) => {
     stopPolling();
     stopTimers();
+    if (setupModeTimer) { clearTimeout(setupModeTimer); setupModeTimer = null; }
     if (pendingTextEntry) { clearTimeout(pendingTextEntry.timer); pendingTextEntry = null; }
     if (isActive(config)) {
       await sendPlain("🔴 Pi session ended").catch(() => {});
@@ -1125,6 +1130,17 @@ export default function walkieExtension(pi: ExtensionAPI) {
           }
 
           setupMode = true;
+          // Expire setup mode automatically if nobody pairs within 5 minutes.
+          if (setupModeTimer) clearTimeout(setupModeTimer);
+          setupModeTimer = setTimeout(() => {
+            if (setupMode) {
+              setupMode = false;
+              setupModeTimer = null;
+              if (lastCtx) updateStatus(lastCtx);
+              lastCtx?.ui.notify("⏱ Setup mode expired — run /walkie setup again to pair.", "warning");
+            }
+          }, SETUP_MODE_TTL_MS);
+
           config.enabled = true;
           await persistConfig(config);
           if (config.topicId !== undefined) {
@@ -1137,7 +1153,7 @@ export default function walkieExtension(pi: ExtensionAPI) {
           startPolling().catch(() => {});
 
           ctx.ui.notify(
-            "📱 Send any message to your Telegram bot to pair this chat.",
+            "📱 Send any message to your Telegram bot to pair this chat (expires in 5 min).",
             "info",
           );
           break;
