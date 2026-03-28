@@ -91,6 +91,15 @@ export interface SendMessageOptions {
   message_thread_id?: number;
 }
 
+// ── Constants ──────────────────────────────────────────────────────────────────
+
+/** Hard timeout for all one-shot API calls — prevents indefinite hangs on network stalls. */
+const REQUEST_TIMEOUT_MS = 10_000;
+/** Separate, longer timeout for file downloads (Telegram allows up to 20 MB). */
+const DOWNLOAD_TIMEOUT_MS = 30_000;
+/** Telegram's documented maximum file size accessible via the Bot API. */
+const MAX_DOWNLOAD_BYTES = 20 * 1024 * 1024;
+
 // ── Error ────────────────────────────────────────────────────────────────────
 
 export class TelegramError extends Error {
@@ -125,11 +134,15 @@ async function call<T>(
 ): Promise<T> {
   const url = `https://api.telegram.org/bot${token}/${method}`;
 
+  // Use the caller's signal when provided (e.g. long-poll abort); otherwise
+  // apply a hard timeout so one-shot API calls never hang indefinitely.
+  const effectiveSignal = signal ?? AbortSignal.timeout(REQUEST_TIMEOUT_MS);
+
   const res = await fetch(url, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: body !== undefined ? JSON.stringify(body) : undefined,
-    signal,
+    signal: effectiveSignal,
   });
 
   const json = (await res.json()) as TelegramResponse<T>;
@@ -154,6 +167,13 @@ export async function getUpdates(
   params: { offset?: number; timeout?: number },
   signal?: AbortSignal,
 ): Promise<TelegramUpdate[]> {
+  // Add a safety-net timeout slightly longer than the Telegram long-poll window
+  // so a stalled network connection never freezes the polling loop forever.
+  const pollMs = ((params.timeout ?? 30) + 10) * 1000;
+  const timeoutSignal = AbortSignal.timeout(pollMs);
+  const effectiveSignal = signal
+    ? AbortSignal.any([signal, timeoutSignal])
+    : timeoutSignal;
   return call<TelegramUpdate[]>(
     token,
     "getUpdates",
@@ -162,7 +182,7 @@ export async function getUpdates(
       timeout: params.timeout ?? 30,
       allowed_updates: ["message", "callback_query"],
     },
-    signal,
+    effectiveSignal,
   );
 }
 
@@ -312,7 +332,17 @@ export async function downloadFile(
   filePath: string,
 ): Promise<Buffer> {
   const url = `https://api.telegram.org/file/bot${token}/${filePath}`;
-  const res = await fetch(url);
+  const res = await fetch(url, { signal: AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS) });
   if (!res.ok) throw new Error(`Failed to download file: ${res.status}`);
-  return Buffer.from(await res.arrayBuffer());
+  // Reject oversized files before buffering — Content-Length is a best-effort
+  // early check; the buffer size check below is the hard enforcement.
+  const contentLength = res.headers.get("content-length");
+  if (contentLength && parseInt(contentLength, 10) > MAX_DOWNLOAD_BYTES) {
+    throw new Error(`File too large (${contentLength} bytes); max is ${MAX_DOWNLOAD_BYTES}`);
+  }
+  const buf = Buffer.from(await res.arrayBuffer());
+  if (buf.length > MAX_DOWNLOAD_BYTES) {
+    throw new Error(`File too large (${buf.length} bytes); max is ${MAX_DOWNLOAD_BYTES}`);
+  }
+  return buf;
 }
