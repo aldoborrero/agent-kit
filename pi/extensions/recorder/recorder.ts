@@ -488,6 +488,19 @@ let state = {
   toolCallStarts: new Map<string, number>(),
 };
 
+// Cached prepared statements (initialized once in initDatabase, cleared on close)
+let stmts: {
+  insertSession: BetterSqlite3Statement;
+  updateSessionEnd: BetterSqlite3Statement;
+  updateSessionTokens: BetterSqlite3Statement;
+  insertTurn: BetterSqlite3Statement;
+  updateTurn: BetterSqlite3Statement;
+  insertToolCall: BetterSqlite3Statement;
+  updateToolCall: BetterSqlite3Statement;
+  insertMessage: BetterSqlite3Statement;
+  insertModelChange: BetterSqlite3Statement;
+} | null = null;
+
 // Max age for orphaned tool call entries (5 minutes)
 const TOOL_CALL_TTL_MS = 5 * 60 * 1000;
 
@@ -531,23 +544,86 @@ async function initDatabase(): Promise<void> {
   // Ensure schema exists (idempotent via IF NOT EXISTS)
   db.exec(SCHEMA);
 
-  // Write datasette metadata alongside the database
-  try {
-    writeFileSync(join(piDir, METADATA_FILENAME), DATASETTE_METADATA);
-  } catch (e) {
-    console.error(LOG_PREFIX, "failed to write datasette metadata:", e);
+  // Prepare statements once — reused for all subsequent event handlers
+  stmts = {
+    insertSession: db.prepare(
+      `INSERT INTO sessions (id, session_file, cwd, started_at, model_provider, model_id)
+       VALUES (?, ?, ?, ?, ?, ?)
+       ON CONFLICT(id) DO UPDATE SET
+         session_file = excluded.session_file,
+         model_provider = COALESCE(excluded.model_provider, sessions.model_provider),
+         model_id = COALESCE(excluded.model_id, sessions.model_id)`,
+    ),
+    updateSessionEnd: db.prepare(
+      `UPDATE sessions SET ended_at = ? WHERE id = ?`,
+    ),
+    updateSessionTokens: db.prepare(
+      `UPDATE sessions SET
+         total_input_tokens = total_input_tokens + ?,
+         total_output_tokens = total_output_tokens + ?,
+         total_cost = total_cost + ?
+       WHERE id = ?`,
+    ),
+    insertTurn: db.prepare(
+      `INSERT INTO turns (session_id, turn_index, iteration_number, started_at)
+       VALUES (?, ?, ?, ?)
+       ON CONFLICT(session_id, turn_index, iteration_number) DO UPDATE SET
+         started_at = excluded.started_at,
+         ended_at = NULL,
+         duration_ms = NULL,
+         model_provider = NULL,
+         model_id = NULL,
+         input_tokens = 0,
+         output_tokens = 0,
+         cost = 0,
+         stop_reason = NULL
+       RETURNING id`,
+    ),
+    updateTurn: db.prepare(
+      `UPDATE turns SET
+         ended_at = ?, duration_ms = ?,
+         model_provider = ?, model_id = ?,
+         input_tokens = ?, output_tokens = ?, cost = ?,
+         stop_reason = ?
+       WHERE id = ?`,
+    ),
+    insertToolCall: db.prepare(
+      `INSERT INTO tool_calls (id, session_id, turn_id, tool_name, input_json, started_at)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+    ),
+    updateToolCall: db.prepare(
+      `UPDATE tool_calls SET
+         ended_at = ?, duration_ms = ?, is_error = ?, result_text = ?
+       WHERE id = ?`,
+    ),
+    insertMessage: db.prepare(
+      `INSERT INTO messages (session_id, role, content, turn_id, timestamp)
+       VALUES (?, ?, ?, ?, ?)`,
+    ),
+    insertModelChange: db.prepare(
+      `INSERT INTO model_changes (session_id, timestamp, source, from_provider, from_model_id, to_provider, to_model_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    ),
+  };
+
+  // Write datasette metadata only if missing or outdated
+  const metadataPath = join(piDir, METADATA_FILENAME);
+  if (!existsSync(metadataPath)) {
+    try {
+      writeFileSync(metadataPath, DATASETTE_METADATA);
+    } catch (e) {
+      console.error(LOG_PREFIX, "failed to write datasette metadata:", e);
+    }
   }
 }
 
-// Helper: Safe database operation (returns result or null on error)
-function safeRun(
-  sql: string,
-  params: unknown[] = [],
+// Helper: Run a cached prepared statement safely (returns result or null on error)
+function safeStmtRun(
+  stmt: BetterSqlite3Statement,
+  ...params: unknown[]
 ): { changes: number; lastInsertRowid: number | bigint } | null {
-  if (!db) return null;
-
   try {
-    return db.prepare(sql).run(...params);
+    return stmt.run(...params);
   } catch (e) {
     console.error(LOG_PREFIX, "SQL error:", e);
     return null;
@@ -714,14 +790,9 @@ export default function recorderExtension(pi: ExtensionAPI) {
       const modelId = ctx.model?.id ?? null;
 
       // ON CONFLICT: preserve original started_at to avoid losing the real start time on resumed sessions
-      safeRun(
-        `INSERT INTO sessions (id, session_file, cwd, started_at, model_provider, model_id)
-         VALUES (?, ?, ?, ?, ?, ?)
-         ON CONFLICT(id) DO UPDATE SET
-           session_file = excluded.session_file,
-           model_provider = COALESCE(excluded.model_provider, sessions.model_provider),
-           model_id = COALESCE(excluded.model_id, sessions.model_id)`,
-        [state.sessionId, sessionFile, ctx.cwd, Date.now(), modelProvider, modelId],
+      safeStmtRun(
+        stmts!.insertSession,
+        state.sessionId, sessionFile, ctx.cwd, Date.now(), modelProvider, modelId,
       );
 
     } catch (e) {
@@ -735,29 +806,23 @@ export default function recorderExtension(pi: ExtensionAPI) {
 
   // Input: record user message
   pi.on("input", async (event: InputEvent) => {
-    if (!enabled || !db || !state.sessionId) return;
+    if (!enabled || !db || !stmts || !state.sessionId) return;
 
     const content = truncate(event.text);
-
-    safeRun(
-      `INSERT INTO messages (session_id, role, content, timestamp)
-       VALUES (?, ?, ?, ?)`,
-      [state.sessionId, "user", content, Date.now()],
-    );
+    safeStmtRun(stmts.insertMessage, state.sessionId, "user", content, null, Date.now());
   });
 
   // Session shutdown: finalize and close
   pi.on("session_shutdown", async () => {
     if (!db || !state.sessionId) return;
 
-    // safeRun already catches SQL errors internally
-    safeRun(
-      `UPDATE sessions SET ended_at = ? WHERE id = ?`,
-      [Date.now(), state.sessionId],
-    );
+    if (stmts) {
+      safeStmtRun(stmts.updateSessionEnd, Date.now(), state.sessionId);
+    }
 
     state.toolCallStarts.clear();
     state.sessionId = null;
+    stmts = null;
     if (db) {
       try {
         db.close();
@@ -770,7 +835,7 @@ export default function recorderExtension(pi: ExtensionAPI) {
 
   // Turn start: record turn beginning
   pi.on("turn_start", async (event: TurnStartEvent) => {
-    if (!enabled || !db || !state.sessionId) return;
+    if (!enabled || !db || !stmts || !state.sessionId) return;
 
     // Prune orphaned tool call timestamps to prevent unbounded Map growth
     pruneToolCallStarts();
@@ -789,21 +854,9 @@ export default function recorderExtension(pi: ExtensionAPI) {
 
       // Use INSERT with RETURNING to get the turn ID in a single query
       // Each iteration gets its own row with unique (session_id, turn_index, iteration_number)
-      const turnRow = db.prepare(
-        `INSERT INTO turns (session_id, turn_index, iteration_number, started_at)
-         VALUES (?, ?, ?, ?)
-         ON CONFLICT(session_id, turn_index, iteration_number) DO UPDATE SET
-           started_at = excluded.started_at,
-           ended_at = NULL,
-           duration_ms = NULL,
-           model_provider = NULL,
-           model_id = NULL,
-           input_tokens = 0,
-           output_tokens = 0,
-           cost = 0,
-           stop_reason = NULL
-         RETURNING id`
-      ).get(state.sessionId, event.turnIndex, state.currentIteration, state.currentTurnStartedAt) as { id: number } | undefined;
+      const turnRow = stmts.insertTurn.get(
+        state.sessionId, event.turnIndex, state.currentIteration, state.currentTurnStartedAt,
+      ) as { id: number } | undefined;
 
       state.currentTurnId = turnRow ? turnRow.id : null;
     } catch (e) {
@@ -813,7 +866,7 @@ export default function recorderExtension(pi: ExtensionAPI) {
 
   // Turn end: record turn completion
   pi.on("turn_end", async (event: TurnEndEvent) => {
-    if (!enabled || !db || !state.sessionId || !state.currentTurnId) return;
+    if (!enabled || !db || !stmts || !state.sessionId || !state.currentTurnId) return;
 
     try {
       const endedAt = Date.now();
@@ -853,15 +906,10 @@ export default function recorderExtension(pi: ExtensionAPI) {
       }
 
       // Atomic: update turn, accumulate session totals, and insert message
+      // Use cached statements inside an implicit transaction for atomicity
+      const s = stmts;
       const commitTurn = db.transaction(() => {
-        db!.prepare(
-          `UPDATE turns SET
-             ended_at = ?, duration_ms = ?,
-             model_provider = ?, model_id = ?,
-             input_tokens = ?, output_tokens = ?, cost = ?,
-             stop_reason = ?
-           WHERE id = ?`,
-        ).run(
+        s.updateTurn.run(
           endedAt, durationMs,
           provider, model,
           inputTokens, outputTokens, cost,
@@ -869,19 +917,10 @@ export default function recorderExtension(pi: ExtensionAPI) {
           state.currentTurnId,
         );
 
-        db!.prepare(
-          `UPDATE sessions SET
-             total_input_tokens = total_input_tokens + ?,
-             total_output_tokens = total_output_tokens + ?,
-             total_cost = total_cost + ?
-           WHERE id = ?`,
-        ).run(inputTokens, outputTokens, cost, state.sessionId);
+        s.updateSessionTokens.run(inputTokens, outputTokens, cost, state.sessionId);
 
         if (assistantText) {
-          db!.prepare(
-            `INSERT INTO messages (session_id, role, content, turn_id, timestamp)
-             VALUES (?, ?, ?, ?, ?)`,
-          ).run(state.sessionId, "assistant", assistantText, state.currentTurnId, endedAt);
+          s.insertMessage.run(state.sessionId, "assistant", assistantText, state.currentTurnId, endedAt);
         }
       });
       commitTurn();
@@ -892,7 +931,7 @@ export default function recorderExtension(pi: ExtensionAPI) {
 
   // Tool call: record tool invocation start
   pi.on("tool_call", async (event: ToolCallEvent) => {
-    if (!enabled || !db || !state.sessionId) return;
+    if (!enabled || !db || !stmts || !state.sessionId) return;
 
     try {
       const startedAt = Date.now();
@@ -903,17 +942,10 @@ export default function recorderExtension(pi: ExtensionAPI) {
         inputJson = inputJson.substring(0, MAX_RESULT_SIZE) + TRUNCATION_SUFFIX;
       }
 
-      safeRun(
-        `INSERT INTO tool_calls (id, session_id, turn_id, tool_name, input_json, started_at)
-         VALUES (?, ?, ?, ?, ?, ?)`,
-        [
-          event.toolCallId,
-          state.sessionId,
-          state.currentTurnId,
-          event.toolName,
-          inputJson,
-          startedAt,
-        ],
+      safeStmtRun(
+        stmts.insertToolCall,
+        event.toolCallId, state.sessionId, state.currentTurnId,
+        event.toolName, inputJson, startedAt,
       );
     } catch (e) {
       console.error(LOG_PREFIX, "tool_call error:", e);
@@ -922,7 +954,7 @@ export default function recorderExtension(pi: ExtensionAPI) {
 
   // Tool result: record tool completion
   pi.on("tool_result", async (event: ToolResultEvent) => {
-    if (!enabled || !db || !state.sessionId) return;
+    if (!enabled || !db || !stmts || !state.sessionId) return;
 
     try {
       const endedAt = Date.now();
@@ -935,11 +967,9 @@ export default function recorderExtension(pi: ExtensionAPI) {
         event.content as ReadonlyArray<{ type: string; [k: string]: unknown }>,
       );
 
-      safeRun(
-        `UPDATE tool_calls SET
-           ended_at = ?, duration_ms = ?, is_error = ?, result_text = ?
-         WHERE id = ?`,
-        [endedAt, durationMs, event.isError ? 1 : 0, resultText, event.toolCallId],
+      safeStmtRun(
+        stmts.updateToolCall,
+        endedAt, durationMs, event.isError ? 1 : 0, resultText, event.toolCallId,
       );
     } catch (e) {
       console.error(LOG_PREFIX, "tool_result error:", e);
@@ -948,21 +978,18 @@ export default function recorderExtension(pi: ExtensionAPI) {
 
   // Model select: record model changes
   pi.on("model_select", async (event: ModelSelectEvent) => {
-    if (!enabled || !db || !state.sessionId) return;
+    if (!enabled || !db || !stmts || !state.sessionId) return;
 
     try {
-      safeRun(
-        `INSERT INTO model_changes (session_id, timestamp, source, from_provider, from_model_id, to_provider, to_model_id)
-         VALUES (?, ?, ?, ?, ?, ?, ?)`,
-        [
-          state.sessionId,
-          Date.now(),
-          event.source,
-          event.previousModel?.provider ?? null,
-          event.previousModel?.id ?? null,
-          event.model.provider,
-          event.model.id,
-        ],
+      safeStmtRun(
+        stmts.insertModelChange,
+        state.sessionId,
+        Date.now(),
+        event.source,
+        event.previousModel?.provider ?? null,
+        event.previousModel?.id ?? null,
+        event.model.provider,
+        event.model.id,
       );
     } catch (e) {
       console.error(LOG_PREFIX, "model_select error:", e);
