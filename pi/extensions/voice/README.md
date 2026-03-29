@@ -12,13 +12,23 @@ Toggle-to-record speech-to-text input for pi-coding-agent. Multiple STT backends
 | `/voice provider <auto\|groq\|openai\|daemon>` | Switch STT provider |
 | `/voice lang <code>` | Set transcription language (default: `en`) |
 | `/voice mode <paste\|send>` | Set output mode (`paste` = editor, `send` = auto-submit) |
+| `/voice shortcut <key>` | Change the keyboard shortcut (default: `ctrl+alt+v`) |
 | `/voice status` | Show current configuration |
 
 All subcommands support tab completion — type `/voice ` and press Tab.
 
 ## Keyboard Shortcut
 
-`Ctrl+Alt+V` — toggle recording
+`Ctrl+Alt+V` — toggle recording (default, configurable)
+
+To change the shortcut, run `/voice shortcut <key>` then `/reload`:
+
+```
+/voice shortcut ctrl+shift+v
+/reload
+```
+
+Key format: `modifier+key` — e.g. `ctrl+alt+v`, `ctrl+shift+r`, `alt+v`. See [keybindings.md](https://github.com/mariozechner/pi-coding-agent/docs/keybindings.md) for supported keys.
 
 ## STT Providers
 
@@ -52,6 +62,8 @@ Persisted config takes priority over env vars.
 | `VOICE_DAEMON_URL` | `http://localhost:8765` | Local whisper daemon URL |
 | `VOICE_LANG` | `en` | Transcription language (env var fallback) |
 | `VOICE_MODE` | `paste` | Output mode (env var fallback) |
+
+The `shortcut` field in `~/.pi/voice.json` persists the configured key. Changes require `/reload` or a pi restart.
 
 ## System Dependencies
 

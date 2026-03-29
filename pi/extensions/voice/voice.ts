@@ -17,12 +17,13 @@
  * Config is persisted to ~/.pi/voice.json between sessions.
  */
 
+import { readFileSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { DynamicBorder, getSettingsListTheme } from "@mariozechner/pi-coding-agent";
-import { Container, Key, type SettingItem, SettingsList, Text } from "@mariozechner/pi-tui";
+import { Container, type SettingItem, SettingsList, Text } from "@mariozechner/pi-tui";
 import { createProvider, detectProvider, type ProviderName, type STTProvider } from "./providers.js";
 import { DaemonRecorder, type Recorder, SpawnRecorder } from "./recorder.js";
 
@@ -44,6 +45,18 @@ interface SavedConfig {
 	provider?: ProviderName;
 	lang: string;
 	mode: "paste" | "send";
+	shortcut?: string;
+}
+
+const DEFAULT_SHORTCUT = "ctrl+alt+v";
+
+function loadSavedConfigSync(): Partial<SavedConfig> {
+	try {
+		const raw = readFileSync(CONFIG_FILE, "utf8");
+		return JSON.parse(raw) as Partial<SavedConfig>;
+	} catch {
+		return {};
+	}
 }
 
 async function loadSavedConfig(): Promise<Partial<SavedConfig>> {
@@ -55,9 +68,9 @@ async function loadSavedConfig(): Promise<Partial<SavedConfig>> {
 	}
 }
 
-async function persistConfig(lang: string, mode: "paste" | "send", provider: ProviderName | null): Promise<void> {
+async function persistConfig(lang: string, mode: "paste" | "send", provider: ProviderName | null, shortcut: string): Promise<void> {
 	try {
-		const saved: SavedConfig = { lang, mode };
+		const saved: SavedConfig = { lang, mode, shortcut };
 		if (provider) saved.provider = provider;
 		await mkdir(join(homedir(), ".pi"), { recursive: true });
 		await writeFile(CONFIG_FILE, JSON.stringify(saved, null, 2), "utf8");
@@ -74,9 +87,14 @@ export default function voiceExtension(pi: ExtensionAPI) {
 	let levelInterval: ReturnType<typeof setInterval> | null = null;
 	let hints = "";
 
+	// Read shortcut synchronously — registerShortcut runs at load time
+	const initConfig = loadSavedConfigSync();
+	const activeShortcut = initConfig.shortcut ?? DEFAULT_SHORTCUT;
+
 	const config = {
 		lang: process.env.VOICE_LANG ?? "en",
 		mode: (process.env.VOICE_MODE ?? "paste") as "paste" | "send",
+		shortcut: activeShortcut,
 	};
 
 	// ─── Provider / Recorder init ───────────────────────────────────
@@ -280,8 +298,11 @@ export default function voiceExtension(pi: ExtensionAPI) {
 
 	// ─── Keyboard shortcut ──────────────────────────────────────────
 
-	pi.registerShortcut(Key.ctrlAlt("v"), (ctx) => {
-		toggle(ctx);
+	pi.registerShortcut(activeShortcut as Parameters<typeof pi.registerShortcut>[0], {
+		description: "Toggle voice recording",
+		handler: (ctx) => {
+			toggle(ctx);
+		},
 	});
 
 	// ─── Command ────────────────────────────────────────────────────
@@ -290,7 +311,7 @@ export default function voiceExtension(pi: ExtensionAPI) {
 		description: "Voice input — toggle recording or configure (config | cancel | status | provider | lang | mode)",
 
 		getArgumentCompletions: (prefix: string) => {
-			const subs = ["config", "cancel", "status", "provider", "lang", "mode"];
+			const subs = ["config", "cancel", "status", "provider", "lang", "mode", "shortcut"];
 			const filtered = subs.filter((s) => s.startsWith(prefix));
 			return filtered.length > 0 ? filtered.map((s) => ({ value: s, label: s })) : null;
 		},
@@ -356,7 +377,7 @@ export default function voiceExtension(pi: ExtensionAPI) {
 									config.mode = newValue as "paste" | "send";
 								}
 								updateStatus(ctx);
-								persistConfig(config.lang, config.mode, providerName).catch(() => {});
+								persistConfig(config.lang, config.mode, providerName, config.shortcut).catch(() => {});
 							},
 							() => done(undefined),
 						);
@@ -385,12 +406,12 @@ export default function voiceExtension(pi: ExtensionAPI) {
 					if (name === "auto") {
 						initProvider();
 						updateStatus(ctx);
-						await persistConfig(config.lang, config.mode, providerName);
+						await persistConfig(config.lang, config.mode, providerName, config.shortcut);
 						if (ctx.hasUI) ctx.ui.notify(`Voice provider: auto-detect → ${providerName ?? "none"}`, "info");
 					} else if (name === "groq" || name === "openai" || name === "daemon") {
 						initProvider(name);
 						updateStatus(ctx);
-						await persistConfig(config.lang, config.mode, providerName);
+						await persistConfig(config.lang, config.mode, providerName, config.shortcut);
 						if (ctx.hasUI) ctx.ui.notify(`Voice provider: ${name}`, "info");
 					} else {
 						if (ctx.hasUI) ctx.ui.notify("Usage: /voice provider <auto|groq|openai|daemon>", "error");
@@ -402,7 +423,7 @@ export default function voiceExtension(pi: ExtensionAPI) {
 					const code = parts[1];
 					if (code) {
 						config.lang = code;
-						await persistConfig(config.lang, config.mode, providerName);
+						await persistConfig(config.lang, config.mode, providerName, config.shortcut);
 						if (ctx.hasUI) ctx.ui.notify(`Voice language: ${code}`, "info");
 					} else {
 						if (ctx.hasUI) ctx.ui.notify(`Voice language: ${config.lang}`, "info");
@@ -414,10 +435,22 @@ export default function voiceExtension(pi: ExtensionAPI) {
 					const mode = parts[1]?.toLowerCase();
 					if (mode === "paste" || mode === "send") {
 						config.mode = mode;
-						await persistConfig(config.lang, config.mode, providerName);
+						await persistConfig(config.lang, config.mode, providerName, config.shortcut);
 						if (ctx.hasUI) ctx.ui.notify(`Voice mode: ${mode}`, "info");
 					} else {
 						if (ctx.hasUI) ctx.ui.notify("Usage: /voice mode <paste|send>", "error");
+					}
+					break;
+				}
+
+				case "shortcut": {
+					const key = parts.slice(1).join("+").toLowerCase();
+					if (key) {
+						config.shortcut = key;
+						await persistConfig(config.lang, config.mode, providerName, config.shortcut);
+						if (ctx.hasUI) ctx.ui.notify(`Voice shortcut: ${key}\nRun /reload for it to take effect.`, "info");
+					} else {
+						if (ctx.hasUI) ctx.ui.notify(`Voice shortcut: ${config.shortcut}\nUsage: /voice shortcut <key> (e.g. ctrl+alt+v)`, "info");
 					}
 					break;
 				}
@@ -427,6 +460,7 @@ export default function voiceExtension(pi: ExtensionAPI) {
 						`Provider : ${providerName ?? "none (run /voice config)"}`,
 						`Language : ${config.lang}`,
 						`Mode     : ${config.mode}`,
+						`Shortcut : ${config.shortcut} (active: ${activeShortcut})`,
 						`State    : ${state}`,
 						`Recorder : ${recorder?.constructor.name ?? "none"}`,
 					];
@@ -453,6 +487,7 @@ export default function voiceExtension(pi: ExtensionAPI) {
 		const saved = await loadSavedConfig();
 		if (saved.lang) config.lang = saved.lang;
 		if (saved.mode) config.mode = saved.mode;
+		if (saved.shortcut) config.shortcut = saved.shortcut;
 
 		// Build hints from project context
 		try {

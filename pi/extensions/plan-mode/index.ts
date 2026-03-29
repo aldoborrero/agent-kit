@@ -267,10 +267,10 @@ Present your plan under a "Plan:" header. Rules:
 - Hard limit: 40 lines. If the plan is longer, delete prose — not file paths.
 
 Plan:
-1. `path/to/file.ts` — description of change
-2. `path/to/other.ts` — description of change
+1. path/to/file.ts — description of change
+2. path/to/other.ts — description of change
 ...
-Verify: <command>
+Verify: command to run
 
 ## Available tools
 

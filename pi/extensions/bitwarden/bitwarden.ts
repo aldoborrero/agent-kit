@@ -28,11 +28,31 @@ const MASKED = "********";
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
-function runRbw(args: string[]): Promise<string> {
+const RBW_TIMEOUT_MS = 10_000;
+
+function runRbw(args: string[], signal?: AbortSignal): Promise<string> {
   return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(new DOMException("Aborted", "AbortError"));
+      return;
+    }
+
     const child = spawn("rbw", args, {
       stdio: ["pipe", "pipe", "pipe"],
     });
+
+    // Hard timeout so a hung rbw-agent can never freeze the agent indefinitely.
+    const timer = setTimeout(() => {
+      child.kill();
+      reject(new Error(`rbw timed out after ${RBW_TIMEOUT_MS / 1000}s`));
+    }, RBW_TIMEOUT_MS);
+
+    const onAbort = () => {
+      child.kill();
+      clearTimeout(timer);
+      reject(new DOMException("Aborted", "AbortError"));
+    };
+    signal?.addEventListener("abort", onAbort, { once: true });
 
     let stdout = "";
     let stderr = "";
@@ -46,6 +66,8 @@ function runRbw(args: string[]): Promise<string> {
     });
 
     child.on("close", (code) => {
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", onAbort);
       if (code !== 0) {
         reject(new Error(stderr.trim() || `rbw exited with code ${code}`));
         return;
@@ -54,22 +76,29 @@ function runRbw(args: string[]): Promise<string> {
     });
 
     child.on("error", (err) => {
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", onAbort);
       reject(err);
     });
   });
 }
 
+// Cached after first check — rbw installation doesn't change during a session.
+let rbwAvailableCache: boolean | null = null;
+
 function isAvailable(): boolean {
+  if (rbwAvailableCache !== null) return rbwAvailableCache;
   try {
     execSync("rbw --version", {
       encoding: "utf-8",
       stdio: ["pipe", "pipe", "pipe"],
       timeout: 5_000,
     });
-    return true;
+    rbwAvailableCache = true;
   } catch {
-    return false;
+    rbwAvailableCache = false;
   }
+  return rbwAvailableCache;
 }
 
 function isUnlocked(): boolean {
@@ -88,7 +117,9 @@ function isUnlocked(): boolean {
 // ── Extension ────────────────────────────────────────────────────────────────
 
 export default function (pi: ExtensionAPI) {
-  function updateStatus(ctx: ExtensionContext) {
+  // Accept a pre-computed unlock state to avoid a redundant execSync call
+  // when the caller already knows the lock status.
+  function updateStatus(ctx: ExtensionContext, currentlyUnlocked?: boolean) {
     if (!ctx.hasUI) return;
 
     if (!isAvailable()) {
@@ -96,7 +127,8 @@ export default function (pi: ExtensionAPI) {
       return;
     }
 
-    if (isUnlocked()) {
+    const unlocked = currentlyUnlocked ?? isUnlocked();
+    if (unlocked) {
       ctx.ui.setStatus("bitwarden", ctx.ui.theme.fg("success", "rbw:unlocked"));
     } else {
       ctx.ui.setStatus("bitwarden", ctx.ui.theme.fg("warning", "rbw:locked"));
@@ -167,9 +199,10 @@ export default function (pi: ExtensionAPI) {
         return;
       }
 
-      // Default: show status
-      updateStatus(ctx);
-      const status = isUnlocked() ? "unlocked" : "locked";
+      // Default: show status — call isUnlocked() once and share the result.
+      const unlocked = isUnlocked();
+      updateStatus(ctx, unlocked);
+      const status = unlocked ? "unlocked" : "locked";
       const lines = [
         `Bitwarden vault: ${status}`,
         "",
@@ -186,6 +219,7 @@ export default function (pi: ExtensionAPI) {
 
   pi.registerTool({
     name: "bw_get",
+    label: "Bitwarden get",
     description: `Retrieve a Bitwarden vault item by name or folder/name.
 
 By default returns only the username. Set field to retrieve a specific field.
@@ -214,7 +248,7 @@ Examples:
         }),
       ),
     }),
-    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+    async execute(_toolCallId, params, signal, _onUpdate, ctx) {
       if (!isAvailable()) {
         return {
           content: [{
@@ -241,51 +275,51 @@ Examples:
 
       // Require user confirmation for sensitive fields
       if (isSensitive && ctx.hasUI) {
-        const choice = await ctx.ui.select(
-          `Expose "${field}" for "${params.name}"?\n\nThis will reveal the ${field} to the agent.`,
-          ["Yes, expose this time", "No, deny access"],
+        const confirmed = await ctx.ui.confirm(
+          `Expose ${field} for "${params.name}"?`,
+          `The agent is requesting the ${field}. This value will be visible in the conversation.`,
         );
 
-        if (choice !== "Yes, expose this time") {
+        if (!confirmed) {
           return {
             content: [{
               type: "text",
-              text: `User denied access to "${field}" field.`,
+              text: `User denied access to the "${field}" field.`,
             }],
           };
         }
       }
 
       try {
-        const args = ["get"];
-
-        // For password (default rbw get behavior) vs specific fields
-        if (field === "password") {
-          args.push(params.name);
-        } else if (field === "username") {
-          args.push("--full", params.name);
-        } else if (field === "totp") {
-          // rbw code generates TOTP
+        // TOTP uses a different subcommand — handle before building get args.
+        if (field === "totp") {
           const codeArgs = ["code", params.name];
           if (params.folder) {
             codeArgs.push("--folder", params.folder);
           }
-          const code = await runRbw(codeArgs);
+          const code = await runRbw(codeArgs, signal ?? undefined);
           return {
             content: [{ type: "text", text: `TOTP code: ${code}` }],
           };
-        } else if (field === "notes") {
+        }
+
+        const args = ["get"];
+
+        // Push --folder before the positional name so all rbw/clap versions accept it.
+        if (params.folder) {
+          args.push("--folder", params.folder);
+        }
+
+        if (field === "password") {
+          args.push(params.name);
+        } else if (field === "username" || field === "notes") {
           args.push("--full", params.name);
         } else {
           // Custom field
           args.push("--field", field, params.name);
         }
 
-        if (params.folder) {
-          args.push("--folder", params.folder);
-        }
-
-        const output = await runRbw(args);
+        const output = await runRbw(args, signal ?? undefined);
 
         if (field === "username" || field === "notes") {
           // --full output format: "password\nusername: value\nURI: value\nNotes:\nline1\nline2"
@@ -294,13 +328,13 @@ Examples:
           if (field === "username") {
             const userLine = lines.find((l) => l.startsWith("Username: "));
             const username = userLine
-              ? userLine.replace("Username: ", "")
+              ? userLine.slice("Username: ".length)
               : "(no username)";
 
             // Also extract URIs for context
             const uris = lines
               .filter((l) => l.startsWith("URI: "))
-              .map((l) => l.replace("URI: ", ""));
+              .map((l) => l.slice("URI: ".length));
 
             const parts = [`Username: ${username}`];
             if (uris.length > 0) {
@@ -314,7 +348,7 @@ Examples:
           }
 
           if (field === "notes") {
-            const notesIdx = lines.findIndex((l) => l === "Notes:");
+            const notesIdx = lines.findIndex((l) => l.trim() === "Notes:");
             if (notesIdx === -1) {
               return {
                 content: [{ type: "text", text: "(no notes)" }],
@@ -343,6 +377,7 @@ Examples:
 
   pi.registerTool({
     name: "bw_list",
+    label: "Bitwarden list",
     description: `List Bitwarden vault items, optionally filtered by a search term.
 
 Returns item names only (no sensitive data). Use bw_get to retrieve specific fields.
@@ -356,7 +391,7 @@ The vault must be unlocked first (use /bw unlock command).`,
         Type.String({ description: "Filter by folder name" }),
       ),
     }),
-    async execute(_toolCallId, params, _signal, _onUpdate, _ctx) {
+    async execute(_toolCallId, params, signal, _onUpdate, _ctx) {
       if (!isAvailable()) {
         return {
           content: [{
@@ -378,15 +413,22 @@ The vault must be unlocked first (use /bw unlock command).`,
       }
 
       try {
-        const args = ["list"];
-
-        if (params.folder) {
-          args.push("--fields", "name,user,folder");
-        } else {
-          args.push("--fields", "name,user,folder");
+        // --fields is a newer rbw feature; fall back to name-only listing if unsupported.
+        let output: string;
+        let hasFieldSupport = true;
+        try {
+          output = await runRbw(["list", "--fields", "name,user,folder"], signal ?? undefined);
+        } catch {
+          output = await runRbw(["list"], signal ?? undefined);
+          hasFieldSupport = false;
         }
 
-        const output = await runRbw(args);
+        // Folder filtering requires tab-separated field output.
+        if (params.folder && !hasFieldSupport) {
+          return {
+            content: [{ type: "text", text: "Folder filtering requires rbw with --fields support. Please upgrade rbw (https://github.com/doy/rbw)." }],
+          };
+        }
         let lines = output.split("\n").filter((l) => l.trim());
 
         // Apply folder filter
@@ -449,6 +491,16 @@ The vault must be unlocked first (use /bw unlock command).`,
     updateStatus(ctx);
   });
 
+  pi.on("before_agent_start", async (_event, _ctx) => {
+    if (!isAvailable() || !isUnlocked()) {
+      return {
+        systemPrompt:
+          "The Bitwarden vault is currently LOCKED. If the user asks for credentials, " +
+          "remind them to run /bw unlock before using the bw_get or bw_list tools.",
+      };
+    }
+  });
+
   // ── Safety: block direct rbw/bw usage in bash ─────────────────────────────
 
   pi.on("tool_call", async (event, _ctx) => {
@@ -457,7 +509,7 @@ The vault must be unlocked first (use /bw unlock command).`,
     const command = event.input.command as string;
 
     // Block direct rbw/bw CLI access to prevent secrets appearing in tool results
-    if (/\brbw\s+(get|code)\b/.test(command)) {
+    if (/\brbw\s+(get|code|list)\b/.test(command)) {
       return {
         block: true,
         reason:
