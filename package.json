@@ -30,7 +30,7 @@
   },
   "pi": {
     "themes": [
-      "pi/extensions/themes"
+      "themes"
     ],
     "skills": [
       "skills"
