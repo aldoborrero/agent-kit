@@ -1,5 +1,5 @@
 ---
-name: superpowers-writing-skills
+name: writing-skills
 description: Use when creating new skills, editing existing skills, or verifying skills work before deployment
 ---
 
@@ -104,7 +104,7 @@ skills/
 
 ```markdown
 ---
-name: superpowers-writing-skills
+name: writing-skills
 description: Use when [specific triggering conditions and symptoms]
 ---
 
