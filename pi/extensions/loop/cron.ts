@@ -1,17 +1,16 @@
 /**
- * Cron Loop Extension — periodic polling and monitoring during a session.
+ * Loop Extension — periodic polling and monitoring during a session.
  *
- * Mirrors Claude Code's CronCreate/CronList/CronDelete pattern. Schedules
- * recurring or one-shot prompts using standard 5-field cron expressions.
- * Tasks fire between turns (when the agent is idle).
+ * Schedules recurring prompts that fire on an interval while the session
+ * is active. Tasks fire between turns (when the agent is idle).
  *
  * Usage:
- *   /cron 5m check if the deployment finished
- *   /cron 2h run the integration tests
- *   /cron check deploy every 30m
- * Management:
- *   /cron-list       — show all scheduled tasks
- *   /cron-delete <id> — cancel a task
+ *   /loop 5m check if the deployment finished
+ *   /loop 2h run the integration tests
+ *   /loop check deploy every 30m
+ *   /loop list           — show all tasks
+ *   /loop delete <id>    — cancel a task
+ *   /loop clear          — delete all tasks
  */
 
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
@@ -83,7 +82,7 @@ interface ParsedInterval {
 }
 
 /**
- * Parse "/cron <input>" into a cron expression and prompt.
+ * Parse "/loop <input>" into a cron expression and prompt.
  *
  * Priority:
  * 1. Leading token: "5m check something"
@@ -245,7 +244,7 @@ export default function cronLoopExtension(pi: ExtensionAPI) {
 		if (!latestCtx?.hasUI) return;
 		const ctx = latestCtx;
 		if (tasks.size === 0) {
-			ctx.ui.setStatus("cron", undefined);
+			ctx.ui.setStatus("loop", undefined);
 			return;
 		}
 
@@ -284,7 +283,7 @@ export default function cronLoopExtension(pi: ExtensionAPI) {
 
 				pi.sendMessage(
 					{
-						customType: "cron",
+						customType: "loop",
 						content: `[Scheduled task ${task.id} — ${task.humanLabel}]\n\n${task.prompt}`,
 						display: true,
 					},
@@ -376,22 +375,22 @@ export default function cronLoopExtension(pi: ExtensionAPI) {
 		tasks.clear();
 	});
 
-	// /cron — unified command
-	pi.registerCommand("cron", {
-		description: "Schedule, list, or delete recurring prompts",
+	// /loop — unified command
+	pi.registerCommand("loop", {
+		description: "Schedule, list, or delete recurring prompts (e.g., /loop 5m check deploy)",
 		handler: async (args, ctx) => {
 			latestCtx = ctx;
 			const input = args.trim();
 
-			// /cron — no args, show status or help
+			// /loop — no args, show status or help
 			if (!input) {
 				if (tasks.size === 0) {
 					ctx.ui.notify(
 						"No scheduled tasks.\n\n" +
 						"Usage:\n" +
-						"  /cron 5m check deploy    schedule a task\n" +
-						"  /cron list               show all tasks\n" +
-						"  /cron delete <id>        cancel a task",
+						"  /loop 5m check deploy    schedule a task\n" +
+						"  /loop list               show all tasks\n" +
+						"  /loop delete <id>        cancel a task",
 						"info",
 					);
 				} else {
@@ -400,13 +399,13 @@ export default function cronLoopExtension(pi: ExtensionAPI) {
 				return;
 			}
 
-			// /cron list
+			// /loop list
 			if (input === "list" || input === "ls") {
 				showList(ctx);
 				return;
 			}
 
-			// /cron delete <id>  |  /cron rm <id>  |  /cron stop <id>
+			// /loop delete <id>  |  /loop rm <id>  |  /loop stop <id>
 			const deleteMatch = input.match(/^(?:delete|rm|stop)\s+(\S+)/);
 			if (deleteMatch) {
 				const id = deleteMatch[1];
@@ -418,12 +417,12 @@ export default function cronLoopExtension(pi: ExtensionAPI) {
 					ctx.ui.notify(`Task ${id} deleted`, "info");
 					if (tasks.size === 0) stopTimer();
 				} else {
-					ctx.ui.notify(`Task ${id} not found. Use /cron list`, "error");
+					ctx.ui.notify(`Task ${id} not found. Use /loop list`, "error");
 				}
 				return;
 			}
 
-			// /cron clear — delete all
+			// /loop clear — delete all
 			if (input === "clear" || input === "clear all") {
 				for (const task of tasks.values()) task.cron.stop();
 				const count = tasks.size;
@@ -434,15 +433,15 @@ export default function cronLoopExtension(pi: ExtensionAPI) {
 				return;
 			}
 
-			// /cron <interval> <prompt> — schedule
+			// /loop <interval> <prompt> — schedule
 			if (tasks.size >= MAX_TASKS) {
-				ctx.ui.notify(`Maximum ${MAX_TASKS} tasks. Use /cron delete <id> or /cron clear`, "error");
+				ctx.ui.notify(`Maximum ${MAX_TASKS} tasks. Use /loop delete <id> or /loop clear`, "error");
 				return;
 			}
 
 			const parsed = parseInput(input);
 			if (!parsed || !parsed.prompt) {
-				ctx.ui.notify("Could not parse. Usage: /cron [interval] <prompt>", "error");
+				ctx.ui.notify("Could not parse. Usage: /loop [interval] <prompt>", "error");
 				return;
 			}
 
@@ -454,7 +453,7 @@ export default function cronLoopExtension(pi: ExtensionAPI) {
 			const nextRun = task.cron.nextRun();
 			let msg = `Scheduled ${task.id} (${parsed.humanLabel})\n` +
 				`Next: ${nextRun ? nextRun.toLocaleTimeString() : "—"}\n` +
-				`Expires in ${RECURRING_EXPIRY_DAYS} days. /cron delete ${task.id} to cancel.`;
+				`Expires in ${RECURRING_EXPIRY_DAYS} days. /loop delete ${task.id} to cancel.`;
 
 			if (parsed.rounded) {
 				msg = `${parsed.rounded}\n\n${msg}`;
@@ -465,7 +464,7 @@ export default function cronLoopExtension(pi: ExtensionAPI) {
 			// Execute immediately
 			pi.sendMessage(
 				{
-					customType: "cron",
+					customType: "loop",
 					content: `[Scheduled task ${task.id} — ${parsed.humanLabel} — initial run]\n\n${parsed.prompt}`,
 					display: true,
 				},

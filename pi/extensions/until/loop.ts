@@ -337,8 +337,8 @@ export default function loopExtension(pi: ExtensionAPI): void {
 		},
 	});
 
-	pi.registerCommand("loop", {
-		description: "Start a follow-up loop until a breakout condition is met",
+	pi.registerCommand("until", {
+		description: "Repeat until a condition is met (e.g., /until tests, /until custom <condition>)",
 		handler: async (args, ctx) => {
 			let nextState = parseArgs(args);
 			if (!nextState) {
