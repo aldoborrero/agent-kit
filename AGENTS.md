@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-agent-kit is a toolkit for AI coding agents providing skills, extensions, and specialized agents for pi-coding-agent and Claude Code.
+agent-kit is a toolkit for AI coding agents providing skills, extensions, themes, and specialized agents for pi-coding-agent and Claude Code.
 
 ## Directory Structure
 
@@ -15,8 +15,9 @@ agent-kit/
 │   └── superpowers/  # 13 workflow skills (brainstorming, TDD, debugging, etc.)
 ├── pi/
 │   ├── agents/       # Agent definitions (scout, planner, worker, reviewer, debugger, brainstormer)
-│   ├── extensions/   # TypeScript extensions (20 tools, 3 external npm packages)
-│   └── prompts/      # Workflow templates (brainstorm, debug, full-cycle, review)
+│   ├── extensions/   # TypeScript extensions (28 local + 3 external npm packages)
+│   ├── prompts/      # Workflow templates (brainstorm, debug, full-cycle, review)
+│   └── themes/       # Color themes (claude-code/lavender)
 └── packages/         # Nix packages (pexpect-cli)
 ```
 
@@ -33,6 +34,8 @@ agent-kit/
 - Use event hooks (`session_start`, `tool_result`, etc.) for side effects
 - Prefer simple solutions over tool replacement
 - Each extension has its own directory with a README.md
+- Extensions with dependencies have their own `package.json`
+- If an extension has multiple `.ts` files, add a `package.json` with `pi.extensions` pointing to the entry file
 
 ### Agents (`pi/agents/`)
 - Lean markdown system prompts that load skills at runtime
@@ -73,6 +76,7 @@ pi install git:github.com/aldoborrero/agent-kit
 2. Add README.md documenting the extension
 3. Register tools via `pi.registerTool()` or use event hooks
 4. Add to `package.json` under `pi.extensions`
+5. If the extension has npm dependencies, add a `package.json` in the extension directory
 
 ### New Agent
 1. Create `pi/agents/<name>.md`
@@ -82,6 +86,38 @@ pi install git:github.com/aldoborrero/agent-kit
 ---
 
 ## Pi Extension Development
+
+### Tool Execute Signature
+
+**CRITICAL**: The correct parameter order for tool execute functions is:
+
+```typescript
+async execute(toolCallId, params, signal, onUpdate, ctx) {
+  // toolCallId: string — unique ID for this tool call
+  // params: object — parsed parameters from the LLM
+  // signal: AbortSignal — for cancellation
+  // onUpdate: function — for streaming progress updates
+  // ctx: ExtensionContext — session context (cwd, ui, etc.)
+}
+```
+
+**Common mistake**: swapping `signal` and `onUpdate`. This causes "onUpdate is not a function" errors and broken abort handling.
+
+### Using ctx.cwd
+
+Always use `ctx.cwd` from pi's API for the project directory, never `process.cwd()`:
+
+```typescript
+// Good — uses pi's API
+pi.on("session_start", async (_event, ctx) => {
+  const projectDir = ctx.cwd;
+});
+
+// Bad — may differ from pi's working directory
+const dir = process.cwd();
+```
+
+If you need `cwd` outside of an event handler, capture it from `session_start` into a module-level variable.
 
 ### Extension Event Reference
 
@@ -122,7 +158,7 @@ pi.on("session_before_switch", async (event, ctx) => {
 ```typescript
 pi.on("session_shutdown", async (event, ctx) => {
   // event: { type: "session_shutdown" }
-  // Use for: cleanup, save state, close connections
+  // Use for: cleanup, save state, close connections, kill child processes
 });
 ```
 
@@ -143,6 +179,8 @@ pi.on("before_agent_start", async (event, ctx) => {
   // event: { type, prompt, images?, systemPrompt }
   // Return { message?: CustomMessage, systemPrompt?: string }
   // Use for: inject context, modify system instructions per turn
+  // Prefer { message: { content: "...", display: false } } over { systemPrompt: "..." }
+  // to append context without replacing the system prompt
 });
 ```
 
@@ -206,6 +244,7 @@ pi.on("input", async (event, ctx) => {
   // event: { type, text, images?, source: "interactive" | "rpc" | "extension" }
   // Fires after extension commands, before skill/template expansion
   // Return { action: "continue" | "transform" | "handled", text?, images? }
+  // Use "transform" to rewrite input (e.g. /namespace:skill → /skill:name)
 });
 ```
 
@@ -328,25 +367,69 @@ const customOps: Partial<BashOperations> = {
 pi.registerTool(createBashTool(ctx.cwd, { operations: customOps }));
 ```
 
+**WARNING**: Replacing built-in tools bypasses pi's safeguards (file mutation queue, fuzzy matching, BOM handling, line ending normalization). Only do this when absolutely necessary.
+
 #### 5. Status Indicators
 
-Extensions can show status in the UI:
+Extensions can show status in the footer. Use the `name:state` format consistently:
 
 ```typescript
 if (ctx.hasUI) {
-  ctx.ui.setStatus("myext", ctx.ui.theme.fg("success", "myext ✓"));
-  // or for errors:
-  ctx.ui.setStatus("myext", ctx.ui.theme.fg("error", "myext ✗"));
+  // Active state — show only when noteworthy
+  ctx.ui.setStatus("myext", ctx.ui.theme.fg("accent", "myext:on"));
+
+  // Error state
+  ctx.ui.setStatus("myext", ctx.ui.theme.fg("error", "myext:error"));
+
+  // Clear — expected/normal state needs no indicator
+  ctx.ui.setStatus("myext", undefined);
 }
 ```
+
+Convention: don't show status for the "expected" state. If the extension is working normally, clear the status. Only show status for noteworthy states (errors, active modes, counts).
+
+#### 6. Guiding Tool Selection with promptGuidelines
+
+Use `promptSnippet` and `promptGuidelines` when registering tools to steer the LLM toward appropriate tool usage:
+
+```typescript
+pi.registerTool({
+  name: "my_tool",
+  description: "...",
+  promptSnippet: "Short summary for tool listing",
+  promptGuidelines: [
+    "Use my_tool when X",
+    "Use grep instead when Y",
+  ],
+  // ...
+});
+```
+
+These get injected into the system prompt alongside other tools' guidelines, helping the LLM choose the right tool.
+
+#### 7. Multi-file Extensions
+
+If your extension has multiple `.ts` files (e.g. `recorder.ts` + helper modules), add a `package.json` so pi only loads the entry point:
+
+```json
+{
+  "pi": {
+    "extensions": ["./main-entry.ts"]
+  }
+}
+```
+
+Without this, pi tries to load every `.ts` file as a separate extension, causing "Extension does not export a valid factory function" errors.
 
 ---
 
 ### Design Principles
 
 1. **Think about the actual goal** - Don't fixate on wrapping/intercepting. Ask: "What am I really trying to achieve?"
-2. **Prefer process.env for environment** - Modifying Node's environment affects all child processes
+2. **Use `ctx.cwd` for paths** - Never use `process.cwd()`. Capture `ctx.cwd` from `session_start` if needed outside event handlers.
 3. **Use events for side effects** - `session_start` for init, `tool_result` for reactions
 4. **Only replace tools when necessary** - When you truly need to modify input or change core behavior
-5. **Use `before_agent_start` for per-turn context** - Inject messages or modify system prompt dynamically
+5. **Use `before_agent_start` for per-turn context** - Inject messages (not systemPrompt replacement) to add context
 6. **Use `context` for message manipulation** - Filter, prune, or augment the conversation before LLM calls
+7. **Clean up on shutdown** - Kill child processes, clear intervals, close connections in `session_shutdown`
+8. **Correct execute signature** - `(toolCallId, params, signal, onUpdate, ctx)` — never swap signal and onUpdate
