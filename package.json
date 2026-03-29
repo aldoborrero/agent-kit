@@ -51,6 +51,7 @@
       "pi/extensions/subagent",
       "pi/extensions/together-provider",
       "pi/extensions/voice",
+      "pi/extensions/bitwarden",
       "pi/extensions/context",
       "pi/extensions/cron",
       "pi-lsp-extension",
