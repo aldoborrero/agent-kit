@@ -269,10 +269,14 @@ function markdownLineToHTML(line: string): string {
 }
 
 function markdownInlineToHTML(text: string): string {
-  // Stash inline code spans so other regexes don't touch their content
+  // Stash inline code spans and links so HTML-escaping doesn't corrupt them
   const stash: string[] = [];
   let s = text.replace(/`([^`\n]+)`/g, (_, content) => {
     return `\x00${stash.push(`<code>${escapeHTML(content)}</code>`) - 1}\x00`;
+  });
+  // Stash links before escaping — URLs must keep raw & characters
+  s = s.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_, linkText, url) => {
+    return `\x00${stash.push(`<a href="${url}">${escapeHTML(linkText)}</a>`) - 1}\x00`;
   });
 
   // HTML-escape the remaining plain text
@@ -284,9 +288,8 @@ function markdownInlineToHTML(text: string): string {
   s = s.replace(/~~(.+?)~~/gs, "<s>$1</s>");                       // ~~strike~~
   s = s.replace(/(?<!\*)\*(?!\s)(.+?)(?<!\s)\*(?!\*)/g, "<i>$1</i>"); // *italic*
   s = s.replace(/(?<!\w)_(?!\s)(.+?)(?<!\s)_(?!\w)/g, "<i>$1</i>");   // _italic_
-  s = s.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2">$1</a>');   // [text](url)
 
-  // Restore stashed code spans
+  // Restore stashed code spans and links
   s = s.replace(/\x00(\d+)\x00/g, (_, i) => stash[Number(i)] ?? "");
   return s;
 }
