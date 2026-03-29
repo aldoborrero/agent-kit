@@ -1,79 +1,125 @@
 /**
  * Skill Namespaces Extension
  *
- * Adds package-based namespacing for skills, similar to Claude Code's
- * `superpowers:brainstorm` syntax. Transforms `/namespace:skill` input
- * into `/skill:skill-name` before pi processes it.
+ * Replaces pi's built-in skill command registration with namespace-aware
+ * commands. Requires `enableSkillCommands: false` in pi settings.
  *
- * Only namespaces listed in ALLOWED_NAMESPACES are registered.
- * Skills are auto-discovered from loaded commands on session start.
+ * Skills under ALLOWED_NAMESPACES directories get prefixed:
+ *   /superpowers:brainstorming
+ *   /superpowers:writing-plans
  *
- * Usage:
- *   /superpowers:brainstorming     → /skill:brainstorming
- *   /superpowers:writing-plans     → /skill:writing-plans
+ * All other skills keep their plain name:
+ *   /ast-grep
+ *   /pexpect-cli
+ *
+ * No duplicates — each skill gets exactly one command.
  */
 
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import { readdirSync, readFileSync, existsSync } from "node:fs";
+import { join, basename } from "node:path";
 
-// Only these directory names are treated as namespaces.
-// Skills under other directories are left as plain /skill:name.
 const ALLOWED_NAMESPACES = new Set([
 	"superpowers",
 ]);
 
+interface SkillInfo {
+	name: string;
+	description: string;
+	namespace: string | null;
+	path: string;
+}
+
+function parseSkillFrontmatter(content: string): { name?: string; description?: string } {
+	const match = content.match(/^---\n([\s\S]*?)\n---/);
+	if (!match) return {};
+
+	const yaml = match[1];
+	const name = yaml.match(/^name:\s*(.+)$/m)?.[1]?.trim();
+	const description = yaml.match(/^description:\s*(.+)$/m)?.[1]?.trim();
+	return { name, description };
+}
+
+function discoverSkills(skillsDir: string): SkillInfo[] {
+	const skills: SkillInfo[] = [];
+	if (!existsSync(skillsDir)) return skills;
+
+	const scanDir = (dir: string, namespace: string | null) => {
+		let entries: string[];
+		try {
+			entries = readdirSync(dir);
+		} catch {
+			return;
+		}
+
+		for (const entry of entries) {
+			const entryPath = join(dir, entry);
+			const skillFile = join(entryPath, "SKILL.md");
+
+			if (existsSync(skillFile)) {
+				// This is a skill directory
+				try {
+					const content = readFileSync(skillFile, "utf-8");
+					const fm = parseSkillFrontmatter(content);
+					const name = fm.name || basename(entryPath);
+					skills.push({
+						name,
+						description: fm.description || `Skill: ${name}`,
+						namespace,
+						path: skillFile,
+					});
+				} catch {
+					// Skip unreadable skills
+				}
+			} else {
+				// Check if this is a namespace directory (contains subdirs with SKILL.md)
+				const candidateNamespace = ALLOWED_NAMESPACES.has(entry) ? entry : null;
+				if (candidateNamespace) {
+					scanDir(entryPath, candidateNamespace);
+				}
+			}
+		}
+	};
+
+	scanDir(skillsDir, null);
+	return skills;
+}
+
 export default function (pi: ExtensionAPI) {
-	// Map of "namespace:name" → skill name
-	const aliases = new Map<string, string>();
+	pi.on("session_start", async (_event, ctx) => {
+		// Discover skills from the package's skills directory
+		const packageRoot = join(ctx.cwd);
+		const skillsDirs = [
+			join(packageRoot, "skills"),
+		];
 
-	pi.on("session_start", async () => {
-		aliases.clear();
-
-		const commands = pi.getCommands();
-		const skills = commands.filter((c) => c.source === "skill");
-
-		for (const skill of skills) {
-			const name = skill.name.startsWith("skill:")
-				? skill.name.slice("skill:".length)
-				: skill.name;
-
-			const skillPath = (skill as { path?: string }).path;
-			if (!skillPath) continue;
-
-			const parts = skillPath.split("/");
-			const skillMdIndex = parts.findIndex((p) => p === "SKILL.md");
-			if (skillMdIndex < 2) continue;
-
-			// e.g. skills/superpowers/brainstorming/SKILL.md → namespace="superpowers"
-			const namespace = parts[skillMdIndex - 2];
-			if (!namespace || !ALLOWED_NAMESPACES.has(namespace)) continue;
-
-			aliases.set(`${namespace}:${name}`, name);
-		}
-	});
-
-	pi.on("input", async (event) => {
-		const text = event.text.trim();
-
-		// Match /namespace:skill-name [args]
-		const match = text.match(/^\/([a-z0-9_-]+):([a-z0-9_-]+)(.*)/i);
-		if (!match) return { action: "continue" as const };
-
-		const [, namespace, name, rest] = match;
-
-		// Only handle allowed namespaces
-		if (!ALLOWED_NAMESPACES.has(namespace.toLowerCase())) {
-			return { action: "continue" as const };
+		// Also check the global agent skills directory
+		const homeDir = process.env.HOME || process.env.USERPROFILE || "";
+		if (homeDir) {
+			skillsDirs.push(join(homeDir, ".pi", "agent", "skills"));
 		}
 
-		const alias = `${namespace}:${name}`;
-		if (aliases.has(alias)) {
-			return {
-				action: "transform" as const,
-				text: `/skill:${aliases.get(alias)}${rest}`,
-				images: event.images,
-			};
-		}
+		const seen = new Set<string>();
 
-		return { action: "continue" as const };
+		for (const skillsDir of skillsDirs) {
+			const skills = discoverSkills(skillsDir);
+
+			for (const skill of skills) {
+				const commandName = skill.namespace
+					? `${skill.namespace}:${skill.name}`
+					: skill.name;
+
+				// Skip duplicates
+				if (seen.has(commandName)) continue;
+				seen.add(commandName);
+
+				pi.registerCommand(commandName, {
+					description: skill.description,
+					handler: async (args) => {
+						pi.sendUserMessage(`/skill:${skill.name} ${args}`.trim());
+					},
+				});
+			}
+		}
 	});
 }
