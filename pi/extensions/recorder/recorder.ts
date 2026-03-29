@@ -585,6 +585,12 @@ export default function recorderExtension(pi: ExtensionAPI) {
     try {
       await initDatabase();
 
+      // Finalize orphaned records from crashed sessions
+      const now = Date.now();
+      safeRun(`UPDATE sessions SET ended_at = ? WHERE ended_at IS NULL`, [now]);
+      safeRun(`UPDATE turns SET ended_at = ?, duration_ms = 0 WHERE ended_at IS NULL`, [now]);
+      safeRun(`UPDATE tool_calls SET ended_at = ?, duration_ms = 0, is_error = 1 WHERE ended_at IS NULL`, [now]);
+
       state.sessionId = ctx.sessionManager.getSessionId();
       state.currentTurnId = null;
       state.currentTurnIndex = null;
@@ -596,7 +602,7 @@ export default function recorderExtension(pi: ExtensionAPI) {
       const modelId = ctx.model?.id ?? null;
 
       safeRun(
-        `INSERT INTO sessions (id, session_file, cwd, started_at, model_provider, model_id)
+        `INSERT OR IGNORE INTO sessions (id, session_file, cwd, started_at, model_provider, model_id)
          VALUES (?, ?, ?, ?, ?, ?)
          ON CONFLICT(id) DO UPDATE SET
            session_file = excluded.session_file,
@@ -642,6 +648,11 @@ export default function recorderExtension(pi: ExtensionAPI) {
       state.toolCallStarts.clear();
       state.sessionId = null;
       if (db) {
+        try {
+          db.pragma("wal_checkpoint(TRUNCATE)");
+        } catch {
+          // Non-fatal — WAL will be cleaned up on next open
+        }
         try {
           db.close();
         } catch (e) {
@@ -785,7 +796,7 @@ export default function recorderExtension(pi: ExtensionAPI) {
       }
 
       safeRun(
-        `INSERT INTO tool_calls (id, session_id, turn_id, tool_name, input_json, started_at)
+        `INSERT OR IGNORE INTO tool_calls (id, session_id, turn_id, tool_name, input_json, started_at)
          VALUES (?, ?, ?, ?, ?, ?)`,
         [
           event.toolCallId,
