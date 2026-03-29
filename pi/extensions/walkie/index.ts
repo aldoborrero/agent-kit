@@ -37,6 +37,8 @@ import { basename, dirname, join } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { getAgentDir } from "@mariozechner/pi-coding-agent";
 import * as tg from "./telegram.js";
+import { MessageQueue } from "./queue.js";
+import { MessageHistory } from "./history.js";
 import { createProvider, detectProvider } from "../voice/providers.js";
 import {
   DRAFT_HEARTBEAT_INTERVAL_MS,
@@ -323,6 +325,7 @@ export default function walkieExtension(pi: ExtensionAPI) {
   // ─── Module-level state ──────────────────────────────────────────────────
 
   let config: Partial<WalkieConfig> = loadConfigSync();
+  let history: MessageHistory | null = null;
   let cachedVoiceConfig: VoiceConfig = {};
   let pollingAbort: AbortController | null = null;
   /** True while pi agent loop is running (between agent_start → agent_end) */
@@ -346,11 +349,34 @@ export default function walkieExtension(pi: ExtensionAPI) {
   /** Current activity label shown in heartbeat messages (thinking / tool / generic) */
   let agentPhase = "Processing request...";
 
+  // ─── Message queue ────────────────────────────────────────────────────────
+  // Messages that arrive while the agent is running are queued instead of
+  // being injected as followUp (which can collide). After each agent_end,
+  // the queue drains the next message, triggering a new run.
+
+  const messageQueue = new MessageQueue();
+
+  /** Drain the next queued message into the agent. Called from agent_end. */
+  function drainQueue(): void {
+    if (!messageQueue.pending) return;
+    const next = messageQueue.shift()!;
+    runTriggerMessageId = next.messageId;
+
+    if (next.images?.length) {
+      const content = [
+        { type: "text" as const, text: next.text },
+        ...next.images,
+      ];
+      pi.sendUserMessage(content);
+    } else {
+      pi.sendUserMessage(next.text);
+    }
+  }
+
   // ─── Text debounce buffer ─────────────────────────────────────────────────
-  // Mirrors nullclaw's telegram_ingress debouncing: consecutive messages from
-  // the same chat within TEXT_DEBOUNCE_MS are merged with \n into one message
-  // before being injected into pi — so the agent sees one coherent prompt
-  // instead of N separate turns.
+  // Consecutive messages from the same chat within TEXT_DEBOUNCE_MS are merged
+  // with \n into one message before being injected — so the agent sees one
+  // coherent prompt instead of N separate turns.
 
   const TEXT_DEBOUNCE_MS = 3_000;
 
@@ -370,8 +396,8 @@ export default function walkieExtension(pi: ExtensionAPI) {
     const lastId = pending.items[pending.items.length - 1]!.messageId;
 
     if (isStreaming) {
-      nextRunTriggerMessageId = lastId;
-      pi.sendUserMessage(merged, { deliverAs: "followUp" });
+      // Agent is busy — queue instead of followUp
+      messageQueue.push({ text: merged, messageId: lastId });
     } else {
       runTriggerMessageId = lastId;
       pi.sendUserMessage(merged);
@@ -620,6 +646,7 @@ export default function walkieExtension(pi: ExtensionAPI) {
     if (lastCtx) updateStatus(lastCtx);
     await registerBotCommands(config.botToken!, config.chatId);
     await tg.sendMessage(config.botToken!, config.chatId, "✅ Paired! Pi will send updates to this chat.", topicOptions(config)).catch(() => {});
+    history?.systemEvent(`Paired with chat ${config.chatId}, user ${config.allowedUserId}`);
   }
 
   async function handleCallbackQuery(cq: tg.TelegramCallbackQuery): Promise<void> {
@@ -646,8 +673,7 @@ export default function walkieExtension(pi: ExtensionAPI) {
         await tg.editMessageReplyMarkup(config.botToken, config.chatId, interaction.messageId).catch(() => {});
       }
       if (isStreaming) {
-        nextRunTriggerMessageId = cq.message?.message_id ?? null;
-        pi.sendUserMessage(opt.submit_text, { deliverAs: "followUp" });
+        messageQueue.push({ text: opt.submit_text, messageId: cq.message?.message_id ?? 0 });
       } else {
         runTriggerMessageId = cq.message?.message_id ?? null;
         pi.sendUserMessage(opt.submit_text);
@@ -726,7 +752,7 @@ export default function walkieExtension(pi: ExtensionAPI) {
 
       case "/new":
         if (isStreaming) {
-          pi.sendUserMessage("When you're done, please start a new session.", { deliverAs: "followUp" });
+          messageQueue.push({ text: "When you're done, please start a new session.", messageId: 0 });
           await sendPlain("📋 Queued: new session after current task.").catch(() => {});
         } else {
           await sendPlain("⚠️ Use /new in the terminal to start a new session.").catch(() => {});
@@ -765,6 +791,7 @@ export default function walkieExtension(pi: ExtensionAPI) {
    * coherent prompt. 👀 fires immediately for each message.
    */
   function injectText(text: string, messageId: number): void {
+    history?.userMessage(text, messageId);
     tg.setMessageReaction(config.botToken, config.chatId, messageId, "👀").catch(() => {});
 
     if (pendingTextEntry) {
@@ -780,6 +807,7 @@ export default function walkieExtension(pi: ExtensionAPI) {
   }
 
   async function handlePhoto(msg: tg.TelegramMessage): Promise<void> {
+    history?.userMessage(msg.caption ?? "[photo]", msg.message_id, [msg.photo![msg.photo!.length - 1]!.file_id]);
     await tg.setMessageReaction(config.botToken, config.chatId, msg.message_id, "👀").catch(() => {});
     const largest = msg.photo![msg.photo!.length - 1]!;
     try {
@@ -796,8 +824,11 @@ export default function walkieExtension(pi: ExtensionAPI) {
         { type: "image" as const, data: buf.toString("base64"), mimeType: "image/jpeg" },
       ];
       if (isStreaming) {
-        nextRunTriggerMessageId = msg.message_id;
-        pi.sendUserMessage(content, { deliverAs: "followUp" });
+        messageQueue.push({
+          text: caption,
+          messageId: msg.message_id,
+          images: [{ type: "image", data: buf.toString("base64"), mimeType: "image/jpeg" }],
+        });
       } else {
         runTriggerMessageId = msg.message_id;
         pi.sendUserMessage(content);
@@ -808,6 +839,7 @@ export default function walkieExtension(pi: ExtensionAPI) {
   }
 
   async function handleVoice(msg: tg.TelegramMessage): Promise<void> {
+    history?.userMessage("[voice]", msg.message_id, [msg.voice?.file_id ?? ""]);
     await tg.setMessageReaction(config.botToken, config.chatId, msg.message_id, "👀").catch(() => {});
     const voiceConfig = cachedVoiceConfig;
     const stt = voiceConfig.provider
@@ -833,8 +865,7 @@ export default function walkieExtension(pi: ExtensionAPI) {
       await sendPlain(`🎤 ${transcription.trim()}`).catch(() => {});
       await tg.setMessageReaction(config.botToken, config.chatId, msg.message_id, "✅").catch(() => {});
       if (isStreaming) {
-        nextRunTriggerMessageId = msg.message_id;
-        pi.sendUserMessage(transcription.trim(), { deliverAs: "followUp" });
+        messageQueue.push({ text: transcription.trim(), messageId: msg.message_id });
       } else {
         runTriggerMessageId = msg.message_id;
         pi.sendUserMessage(transcription.trim());
@@ -899,6 +930,7 @@ export default function walkieExtension(pi: ExtensionAPI) {
     // pi instance in a different project has its own topic without collision.
     config = { enabled: true, streaming: true, ...loadConfigSync(), ...loadProjectConfigSync(ctx.cwd) };
     cachedVoiceConfig = loadVoiceConfigSync();
+    history = new MessageHistory(ctx.cwd, getAgentDir());
 
     updateStatus(ctx);
 
@@ -1052,6 +1084,7 @@ export default function walkieExtension(pi: ExtensionAPI) {
 
     const { visibleText, choices } = parseChoicesBlock(lastAssistantText);
     const body = buildFinalMessage(choices ? visibleText : lastAssistantText, stats);
+    history?.assistantMessage(lastAssistantText);
     const replyOptions = runTriggerMessageId !== null
       ? { reply_parameters: { message_id: runTriggerMessageId } }
       : undefined;
@@ -1077,6 +1110,9 @@ export default function walkieExtension(pi: ExtensionAPI) {
       await tg.setMessageReaction(config.botToken, config.chatId, runTriggerMessageId, "✅").catch(() => {});
     }
     runTriggerMessageId = null;
+
+    // Drain next queued message (if any) to start the next run
+    drainQueue();
   });
 
   pi.on("session_shutdown", async (_event, _ctx) => {
@@ -1084,6 +1120,7 @@ export default function walkieExtension(pi: ExtensionAPI) {
     stopTimers();
     if (setupModeTimer) { clearTimeout(setupModeTimer); setupModeTimer = null; }
     if (pendingTextEntry) { clearTimeout(pendingTextEntry.timer); pendingTextEntry = null; }
+    messageQueue.clear();
     if (isActive(config)) {
       await sendPlain("🔴 Pi session ended").catch(() => {});
     }
@@ -1102,7 +1139,9 @@ export default function walkieExtension(pi: ExtensionAPI) {
 
     handler: async (args, ctx) => {
       lastCtx = ctx;
-      const sub = args.trim().toLowerCase();
+      const parts = args.trim().split(/\s+/);
+      const sub = parts[0]?.toLowerCase() ?? "";
+      const subArgs = parts.slice(1).join(" ");
 
       // ── No arg: toggle ─────────────────────────────────────────────────
       if (!sub) {
@@ -1253,7 +1292,7 @@ export default function walkieExtension(pi: ExtensionAPI) {
             ctx.ui.notify("Walkie not configured — run /walkie setup first.", "warning");
             break;
           }
-          const rawName = args.trim().slice("topic".length).trim();
+          const rawName = subArgs.trim();
           const topicName = rawName || basename(ctx.cwd);
           try {
             const { message_thread_id } = await tg.createForumTopic(config.botToken, config.chatId, topicName);
