@@ -15,32 +15,99 @@ agent-kit/
 │   └── superpowers/  # 13 workflow skills (brainstorming, TDD, debugging, etc.)
 ├── pi/
 │   ├── agents/       # Agent definitions (scout, planner, worker, reviewer, debugger, brainstormer)
-│   ├── extensions/   # TypeScript extensions (28 local + 3 external npm packages)
-│   ├── prompts/      # Workflow templates (brainstorm, debug, full-cycle, review)
-│   └── themes/       # Color themes (claude-code/lavender)
+│   ├── extensions/   # TypeScript extensions (32 local + 3 external npm packages)
+│   └── prompts/      # Workflow templates (brainstorm, debug, full-cycle, review)
+├── themes/           # Color themes (lavender)
 └── packages/         # Nix packages (pexpect-cli)
 ```
+
+## Extensions Quick Reference
+
+### Commands
+
+| Command | Extension | Description |
+|---------|-----------|-------------|
+| `/plan` | plan-mode | Read-only exploration → plan → tracked execution |
+| `/until tests` | until | Repeat until condition met (TDD, iterative fixes) |
+| `/loop 5m <prompt>` | loop | Periodic polling on a schedule |
+| `/diff` | diff | Interactive diff viewer (tuicr/delta/git) |
+| `/voice` | voice | Toggle-to-record speech-to-text |
+| `/walkie setup` | walkie | Telegram bridge for mobile use |
+| `/commit` | git-commit-context | Commit with git status/log context |
+| `/context` | context | Token usage dashboard |
+| `/handoff <goal>` | handoff | Transfer context to new session |
+| `/btw <question>` | btw | Ephemeral side question (no tools, no context pollution) |
+| `/exit` | exit | Alias for /quit |
+| `/sandbox on/off` | sandbox | Toggle OS-level bash sandboxing |
+| `/superpowers:*` | skill-namespaces | Namespaced skill commands |
+
+### Tools (LLM-callable)
+
+| Tool | Extension | Description |
+|------|-----------|-------------|
+| `ast_grep` | ast-grep | Structural code search via AST patterns |
+| `exa_search` | exa-search | AI-powered web search |
+| `brave_search` | brave-search | Privacy-focused web search |
+| `github_search_code` | github-search | Search code on GitHub |
+| `github_search_issues` | github-search | Search GitHub issues |
+| `github_search_prs` | github-search | Search GitHub PRs |
+| `subagent` | subagent | Delegate tasks to specialized agents |
+| `questionnaire` | questionnaire | Ask structured questions |
+| `tuicr` | tuicr | Interactive code review with feedback capture |
+| `bw_get` / `bw_list` | bitwarden | Secure vault access via rbw |
+| `signal_loop_success` | until | Break out of an /until loop |
+
+### Providers
+
+| Provider | Extension | Models |
+|----------|-----------|--------|
+| Groq | groq-provider | GPT-OSS 120B/20B, Kimi K2, Qwen3 32B, Llama 4 Scout |
+| OpenRouter | openrouter-provider | Kimi K2.5, Gemini 3.1/2.5 Pro, Grok 4, Devstral, ByteDance Seed |
+| Together AI | together-provider | Llama, DeepSeek, Qwen, Kimi, GLM, Mistral |
+
+### Background/Automatic
+
+| Extension | Description |
+|-----------|-------------|
+| direnv | Auto-load .envrc environment variables |
+| git-checkpoint | Git stash per turn for /fork restore |
+| notify | Desktop notification when agent finishes |
+| inline-bash | Expand `!{command}` in prompts |
+| recorder | Session analytics to SQLite |
+| permission-gate | Confirm before dangerous bash commands |
+| footer | Git branch, context usage in footer |
+| lsp-guidelines | Steer agent toward LSP tools |
+| skill-namespaces | Register /superpowers:* commands |
+
+### External (npm)
+
+| Package | Description |
+|---------|-------------|
+| pi-lsp-extension | LSP integration (diagnostics, hover, definition, references) |
+| pi-mcp-adapter | MCP server bridge |
+| pi-interactive-shell | Full PTY emulation |
 
 ## Key Conventions
 
 ### Skills (`skills/`)
-- Each skill has a `SKILL.md` file with frontmatter (name, description, user-invocable flag)
-- Skills teach agents how to use external tools via markdown instructions
+- Each skill has a `SKILL.md` file with frontmatter (name, description)
+- Frontmatter `name` MUST match the parent directory name (pi validates this)
+- Skills under `superpowers/` get `/superpowers:*` namespace commands via skill-namespaces extension
 - Compatible with both Claude Code and pi-coding-agent
-- Superpowers skills define workflows (TDD, debugging, planning) not tool usage
 
 ### Pi Extensions (`pi/extensions/`)
 - TypeScript files that register tools with pi-coding-agent
 - Use event hooks (`session_start`, `tool_result`, etc.) for side effects
 - Prefer simple solutions over tool replacement
 - Each extension has its own directory with a README.md
-- Extensions with dependencies have their own `package.json`
+- Extensions with npm dependencies have their own `package.json`
 - If an extension has multiple `.ts` files, add a `package.json` with `pi.extensions` pointing to the entry file
+- npm package extensions go in `node_modules/` and are referenced as `node_modules/<pkg>` in package.json
 
 ### Agents (`pi/agents/`)
 - Lean markdown system prompts that load skills at runtime
+- Scout (haiku) for fast exploration, Planner (opus) for design
 - Located at `~/.pi/agent/agents/` when deployed
-- Reference skills from `~/.pi/agent/skills/`
 
 ### Prompts (`pi/prompts/`)
 - Workflow templates that orchestrate agent chains via subagent extension
@@ -68,8 +135,9 @@ pi install git:github.com/aldoborrero/agent-kit
 
 ### New Skill
 1. Create `skills/<name>/SKILL.md` with frontmatter
-2. Document the tool's CLI interface and usage patterns
-3. Include examples the agent can follow
+2. Frontmatter `name` must match the directory name
+3. Document the tool's CLI interface and usage patterns
+4. Include examples the agent can follow
 
 ### New Extension
 1. Create `pi/extensions/<name>/<name>.ts`
@@ -119,157 +187,24 @@ const dir = process.cwd();
 
 If you need `cwd` outside of an event handler, capture it from `session_start` into a module-level variable.
 
+### Extension pi.extensions Resolution
+
+Entries in `pi.extensions` are resolved as **relative paths from the package root**, not npm package names:
+
+```json
+{
+  "pi": {
+    "extensions": [
+      "pi/extensions/my-ext",              // local directory
+      "node_modules/pi-lsp-extension"      // npm package (must use node_modules/ path)
+    ]
+  }
+}
+```
+
 ### Extension Event Reference
 
-The pi-coding-agent provides 21 events that extensions can hook into. Events are categorized by their lifecycle phase.
-
-### Session Events
-
-| Event | When | Can Cancel | Can Modify |
-|-------|------|------------|------------|
-| `session_start` | Session loads | No | No |
-| `session_before_switch` | Before `/new` or `/resume` | Yes | No |
-| `session_switch` | After session switch | No | No |
-| `session_before_fork` | Before `/fork` | Yes | skipConversationRestore |
-| `session_fork` | After fork | No | No |
-| `session_before_compact` | Before compaction | Yes | compaction result |
-| `session_compact` | After compaction | No | No |
-| `session_before_tree` | Before `/tree` navigation | Yes | summary, instructions |
-| `session_tree` | After tree navigation | No | No |
-| `session_shutdown` | On exit (Ctrl+C, Ctrl+D) | No | No |
-
-#### session_start
-```typescript
-pi.on("session_start", async (event, ctx) => {
-  // event: { type: "session_start" }
-  // Use for: initialization, load environment, set status
-});
-```
-
-#### session_before_switch
-```typescript
-pi.on("session_before_switch", async (event, ctx) => {
-  // event: { type, reason: "new" | "resume", targetSessionFile? }
-  // Return { cancel: true } to prevent switch
-});
-```
-
-#### session_shutdown
-```typescript
-pi.on("session_shutdown", async (event, ctx) => {
-  // event: { type: "session_shutdown" }
-  // Use for: cleanup, save state, close connections, kill child processes
-});
-```
-
-### Agent Events
-
-| Event | When | Can Modify |
-|-------|------|------------|
-| `before_agent_start` | After prompt, before agent loop | systemPrompt, inject message |
-| `agent_start` | Agent loop begins | No |
-| `agent_end` | Agent loop ends | No |
-| `turn_start` | Each turn starts | No |
-| `turn_end` | Each turn ends | No |
-| `context` | Before each LLM call | messages array |
-
-#### before_agent_start
-```typescript
-pi.on("before_agent_start", async (event, ctx) => {
-  // event: { type, prompt, images?, systemPrompt }
-  // Return { message?: CustomMessage, systemPrompt?: string }
-  // Use for: inject context, modify system instructions per turn
-  // Prefer { message: { content: "...", display: false } } over { systemPrompt: "..." }
-  // to append context without replacing the system prompt
-});
-```
-
-#### context
-```typescript
-pi.on("context", async (event, ctx) => {
-  // event: { type: "context", messages: AgentMessage[] }
-  // messages is a deep copy, safe to modify
-  // Return { messages?: AgentMessage[] }
-  // Use for: prune conversation, inject context, filter sensitive data
-});
-```
-
-#### turn_end
-```typescript
-pi.on("turn_end", async (event, ctx) => {
-  // event: { type, turnIndex, message, toolResults }
-  // Use for: cleanup after turn, git stash, logging
-});
-```
-
-### Tool Events
-
-| Event | When | Capabilities |
-|-------|------|--------------|
-| `tool_call` | Before tool executes | Block only (NOT modify input) |
-| `tool_result` | After tool executes | Modify content, details, isError |
-
-#### tool_call
-```typescript
-pi.on("tool_call", async (event, ctx) => {
-  // event: { type, toolName, toolCallId, input }
-  // Return { block: true, reason?: string } to block execution
-  // IMPORTANT: Cannot modify input parameters
-});
-```
-
-#### tool_result
-```typescript
-pi.on("tool_result", async (event, ctx) => {
-  // event: { type, toolName, toolCallId, input, content, details, isError }
-  // details varies by tool:
-  //   bash: { exitCode, outputLines, truncated }
-  //   read: { encoding, size }
-  //   edit: { linesChanged }
-  //   grep: { matchCount, resultType }
-  // Return { content?, details?, isError? } to modify result
-});
-```
-
-### Input Events
-
-| Event | When | Capabilities |
-|-------|------|--------------|
-| `input` | User input received | Transform, handle, or continue |
-| `user_bash` | User runs `!` or `!!` command | Custom operations or result |
-
-#### input
-```typescript
-pi.on("input", async (event, ctx) => {
-  // event: { type, text, images?, source: "interactive" | "rpc" | "extension" }
-  // Fires after extension commands, before skill/template expansion
-  // Return { action: "continue" | "transform" | "handled", text?, images? }
-  // Use "transform" to rewrite input (e.g. /namespace:skill → /skill:name)
-});
-```
-
-#### user_bash
-```typescript
-pi.on("user_bash", async (event, ctx) => {
-  // event: { type, command, excludeFromContext, cwd }
-  // Return { operations?: BashOperations } for custom execution (SSH, containers)
-  // Return { result?: BashResult } to provide complete result
-});
-```
-
-### Model Events
-
-| Event | When | Capabilities |
-|-------|------|--------------|
-| `model_select` | Model changes | Read-only |
-
-#### model_select
-```typescript
-pi.on("model_select", async (event, ctx) => {
-  // event: { type, model, previousModel?, source: "set" | "cycle" | "restore" }
-  // Use for: update status bar, model-specific settings
-});
-```
+The pi-coding-agent provides 21 events. See the Event Lifecycle diagram below for the full flow.
 
 ### Event Lifecycle
 
@@ -304,132 +239,55 @@ exit             → session_shutdown
 
 #### 1. Prefer Simple Solutions Over Tool Replacement
 
-When extending functionality, first consider whether you can achieve the goal without replacing or wrapping existing tools.
+Hook into events instead of replacing tools. Example: direnv loads env vars via `session_start` + `tool_result` hooks, not by wrapping bash.
 
-**Example: Loading direnv environment variables**
+#### 2. Don't Replace Built-in Tools
 
-Bad approach (over-engineered):
-- Replace the entire bash tool
-- Wrap every command with `direnv exec . <cmd>`
-- Reimplement streaming, truncation, and error handling
+Replacing built-in tools (edit, bash, grep) bypasses pi's safeguards: file mutation queue, fuzzy matching, BOM handling, line ending normalization, multiple occurrence detection. Only do this when absolutely necessary.
 
-Good approach (simple):
-- Hook into `session_start` and `tool_result` events
-- Run `direnv export json` to get environment changes
-- Modify `process.env` directly
+#### 3. Status Indicators
+
+Use `name:state` format. Don't show status for the expected state — only for noteworthy states:
 
 ```typescript
-// Simple and effective
-pi.on("session_start", async (_event, ctx) => {
-  loadDirenv(ctx.cwd, ctx);
-});
-
-pi.on("tool_result", async (event, ctx) => {
-  if (event.toolName !== "bash") return;
-  loadDirenv(ctx.cwd, ctx);  // Pick up .envrc changes after cd, git checkout, etc.
-});
+ctx.ui.setStatus("myext", ctx.ui.theme.fg("accent", "myext:on"));  // noteworthy
+ctx.ui.setStatus("myext", undefined);                                // normal = clear
 ```
 
-#### 2. `tool_call` Cannot Modify Input
+#### 4. Guiding Tool Selection
 
-The `tool_call` event can block execution but cannot modify the tool's parameters. If you need to transform input, you must replace the tool entirely.
-
-#### 3. `tool_result` for Reactive Behavior
-
-Use `tool_result` to react after tool execution. This is ideal for:
-- Updating environment after directory changes
-- Logging or metrics
-- Triggering dependent operations
-- Showing status updates
-
-#### 4. Replacing Built-in Tools
-
-To replace a built-in tool, register a tool with the same name:
-
-```typescript
-pi.registerTool({
-  name: "bash",  // Same name replaces built-in
-  // ...
-});
-```
-
-If you need to reuse the built-in logic, import `createBashTool` and provide custom `BashOperations`:
-
-```typescript
-import { createBashTool, type BashOperations } from "@mariozechner/pi-coding-agent";
-
-const customOps: Partial<BashOperations> = {
-  execute: async (command, options) => {
-    // Custom execution logic
-  },
-};
-
-pi.registerTool(createBashTool(ctx.cwd, { operations: customOps }));
-```
-
-**WARNING**: Replacing built-in tools bypasses pi's safeguards (file mutation queue, fuzzy matching, BOM handling, line ending normalization). Only do this when absolutely necessary.
-
-#### 5. Status Indicators
-
-Extensions can show status in the footer. Use the `name:state` format consistently:
-
-```typescript
-if (ctx.hasUI) {
-  // Active state — show only when noteworthy
-  ctx.ui.setStatus("myext", ctx.ui.theme.fg("accent", "myext:on"));
-
-  // Error state
-  ctx.ui.setStatus("myext", ctx.ui.theme.fg("error", "myext:error"));
-
-  // Clear — expected/normal state needs no indicator
-  ctx.ui.setStatus("myext", undefined);
-}
-```
-
-Convention: don't show status for the "expected" state. If the extension is working normally, clear the status. Only show status for noteworthy states (errors, active modes, counts).
-
-#### 6. Guiding Tool Selection with promptGuidelines
-
-Use `promptSnippet` and `promptGuidelines` when registering tools to steer the LLM toward appropriate tool usage:
+Use `promptSnippet` and `promptGuidelines` to steer the LLM:
 
 ```typescript
 pi.registerTool({
   name: "my_tool",
-  description: "...",
   promptSnippet: "Short summary for tool listing",
-  promptGuidelines: [
-    "Use my_tool when X",
-    "Use grep instead when Y",
-  ],
-  // ...
+  promptGuidelines: ["Use my_tool when X", "Use grep instead when Y"],
 });
 ```
 
-These get injected into the system prompt alongside other tools' guidelines, helping the LLM choose the right tool.
+#### 5. Multi-file Extensions
 
-#### 7. Multi-file Extensions
+Add a `package.json` with `pi.extensions` pointing to the entry file. Without this, pi loads every `.ts` as a separate extension.
 
-If your extension has multiple `.ts` files (e.g. `recorder.ts` + helper modules), add a `package.json` so pi only loads the entry point:
+#### 6. Message Injection
 
-```json
-{
-  "pi": {
-    "extensions": ["./main-entry.ts"]
-  }
-}
-```
+Prefer `{ message: { content: "...", display: false } }` over `{ systemPrompt: "..." }` in `before_agent_start` to append context without replacing the system prompt.
 
-Without this, pi tries to load every `.ts` file as a separate extension, causing "Extension does not export a valid factory function" errors.
+#### 7. Walkie Extension Architecture
+
+Walkie bridges pi to Telegram. Pi owns session state — walkie just shuttles messages. Don't duplicate pi's session management (no persistent history needed). Use `MessageQueue` for messages arriving while agent is busy.
 
 ---
 
 ### Design Principles
 
-1. **Think about the actual goal** - Don't fixate on wrapping/intercepting. Ask: "What am I really trying to achieve?"
-2. **Use `ctx.cwd` for paths** - Never use `process.cwd()`. Capture `ctx.cwd` from `session_start` if needed outside event handlers.
+1. **Think about the actual goal** - Don't fixate on wrapping/intercepting
+2. **Use `ctx.cwd` for paths** - Never `process.cwd()`
 3. **Use events for side effects** - `session_start` for init, `tool_result` for reactions
-4. **Only replace tools when necessary** - When you truly need to modify input or change core behavior
-5. **Use `before_agent_start` for per-turn context** - Inject messages (not systemPrompt replacement) to add context
-6. **Use `context` for message manipulation** - Filter, prune, or augment the conversation before LLM calls
-7. **Clean up on shutdown** - Kill child processes, clear intervals, close connections in `session_shutdown`
-8. **Correct execute signature** - `(toolCallId, params, signal, onUpdate, ctx)` — never swap signal and onUpdate
+4. **Only replace tools when necessary** - Safeguards are lost
+5. **Inject messages, don't replace systemPrompt** - Append via `before_agent_start` message
+6. **Use `context` for message manipulation** - Filter, prune, augment before LLM calls
+7. **Clean up on shutdown** - Kill child processes, clear intervals, close connections
+8. **Correct execute signature** - `(toolCallId, params, signal, onUpdate, ctx)`
+9. **Pi owns state, extensions bridge** - Don't duplicate session management in extensions
