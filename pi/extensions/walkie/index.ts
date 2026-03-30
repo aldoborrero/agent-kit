@@ -38,7 +38,6 @@ import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-age
 import { getAgentDir } from "@mariozechner/pi-coding-agent";
 import * as tg from "./telegram.js";
 import { MessageQueue } from "./queue.js";
-import { MessageHistory } from "./history.js";
 import { createProvider, detectProvider } from "../voice/providers.js";
 import {
   DRAFT_HEARTBEAT_INTERVAL_MS,
@@ -325,7 +324,6 @@ export default function walkieExtension(pi: ExtensionAPI) {
   // ─── Module-level state ──────────────────────────────────────────────────
 
   let config: Partial<WalkieConfig> = loadConfigSync();
-  let history: MessageHistory | null = null;
   let cachedVoiceConfig: VoiceConfig = {};
   let pollingAbort: AbortController | null = null;
   /** True while pi agent loop is running (between agent_start → agent_end) */
@@ -646,7 +644,6 @@ export default function walkieExtension(pi: ExtensionAPI) {
     if (lastCtx) updateStatus(lastCtx);
     await registerBotCommands(config.botToken!, config.chatId);
     await tg.sendMessage(config.botToken!, config.chatId, "✅ Paired! Pi will send updates to this chat.", topicOptions(config)).catch(() => {});
-    history?.systemEvent(`Paired with chat ${config.chatId}, user ${config.allowedUserId}`);
   }
 
   async function handleCallbackQuery(cq: tg.TelegramCallbackQuery): Promise<void> {
@@ -791,7 +788,6 @@ export default function walkieExtension(pi: ExtensionAPI) {
    * coherent prompt. 👀 fires immediately for each message.
    */
   function injectText(text: string, messageId: number): void {
-    history?.userMessage(text, messageId);
     tg.setMessageReaction(config.botToken, config.chatId, messageId, "👀").catch(() => {});
 
     if (pendingTextEntry) {
@@ -807,7 +803,6 @@ export default function walkieExtension(pi: ExtensionAPI) {
   }
 
   async function handlePhoto(msg: tg.TelegramMessage): Promise<void> {
-    history?.userMessage(msg.caption ?? "[photo]", msg.message_id, [msg.photo![msg.photo!.length - 1]!.file_id]);
     await tg.setMessageReaction(config.botToken, config.chatId, msg.message_id, "👀").catch(() => {});
     const largest = msg.photo![msg.photo!.length - 1]!;
     try {
@@ -839,7 +834,6 @@ export default function walkieExtension(pi: ExtensionAPI) {
   }
 
   async function handleVoice(msg: tg.TelegramMessage): Promise<void> {
-    history?.userMessage("[voice]", msg.message_id, [msg.voice?.file_id ?? ""]);
     await tg.setMessageReaction(config.botToken, config.chatId, msg.message_id, "👀").catch(() => {});
     const voiceConfig = cachedVoiceConfig;
     const stt = voiceConfig.provider
@@ -930,7 +924,6 @@ export default function walkieExtension(pi: ExtensionAPI) {
     // pi instance in a different project has its own topic without collision.
     config = { enabled: true, streaming: true, ...loadConfigSync(), ...loadProjectConfigSync(ctx.cwd) };
     cachedVoiceConfig = loadVoiceConfigSync();
-    history = new MessageHistory(ctx.cwd, getAgentDir());
 
     updateStatus(ctx);
 
@@ -1084,7 +1077,6 @@ export default function walkieExtension(pi: ExtensionAPI) {
 
     const { visibleText, choices } = parseChoicesBlock(lastAssistantText);
     const body = buildFinalMessage(choices ? visibleText : lastAssistantText, stats);
-    history?.assistantMessage(lastAssistantText);
     const replyOptions = runTriggerMessageId !== null
       ? { reply_parameters: { message_id: runTriggerMessageId } }
       : undefined;
