@@ -501,7 +501,7 @@ async function loadBetterSqlite3(): Promise<BetterSqlite3Constructor> {
     return DatabaseCtor;
   } catch {
     moduleAvailable = false;
-    moduleError = `better-sqlite3 not installed. Run: cd pi/extensions/${EXT_NAME} && npm install`;
+    moduleError = `better-sqlite3 not installed. Run: cd extensions/${EXT_NAME} && npm install`;
     throw new Error(moduleError);
   }
 }

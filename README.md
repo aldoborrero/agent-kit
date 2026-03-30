@@ -12,22 +12,22 @@ pi install git:github.com/aldoborrero/agent-kit
 pi install ./agent-kit
 
 # Test a single extension
-pi -e ./pi/extensions/notify/notify.ts
+pi -e ./extensions/notify/notify.ts
 ```
 
 ## Repository Structure
 
 ```
 agent-kit/
+├── agents/           # Agent definitions (6 agents)
+├── extensions/       # TypeScript extensions (32 local + 3 npm)
+├── prompts/          # Workflow templates (4 prompts)
 ├── skills/           # Markdown skills (Claude Code + pi-coding-agent)
 │   ├── ast-grep/     # AST-based structural code search
 │   ├── kagi-search/  # Privacy-focused search
 │   ├── pexpect-cli/  # Interactive CLI automation
 │   └── superpowers/  # 13 advanced workflow skills
-├── pi/
-│   ├── agents/       # Agent definitions (6 agents)
-│   ├── extensions/   # TypeScript extensions (24 local + 3 npm)
-│   └── prompts/      # Workflow templates (4 prompts)
+├── themes/           # Color themes (lavender)
 └── packages/         # Nix packages (pexpect-cli)
 ```
 
@@ -39,66 +39,66 @@ TypeScript extensions for [pi-coding-agent](https://github.com/badlogic/pi-mono)
 
 | Extension | Description |
 |-----------|-------------|
-| [`ast-grep`](pi/extensions/ast-grep/README.md) | Structural code search using AST patterns with pattern, rule, and inspect modes |
+| [`ast-grep`](extensions/ast-grep/README.md) | Structural code search using AST patterns with pattern, rule, and inspect modes |
 | [`pi-lsp-extension`](https://github.com/samfoy/pi-lsp-extension) | LSP integration — diagnostics, hover, go-to-definition, references, symbols, rename, completions |
 
 ### Safety & Guardrails
 
 | Extension | Description |
 |-----------|-------------|
-| [`sandbox`](pi/extensions/sandbox/README.md) | OS-level sandboxing for bash — filesystem and network restrictions via bubblewrap/sandbox-exec |
-| [`permission-gate`](pi/extensions/permission-gate/README.md) | Confirms before dangerous bash commands (rm -rf, git push --force, sudo, etc.) |
-| [`git-checkpoint`](pi/extensions/git-checkpoint/README.md) | Git stash checkpoints at each turn so `/fork` can restore code state |
+| [`sandbox`](extensions/sandbox/README.md) | OS-level sandboxing for bash — filesystem and network restrictions via bubblewrap/sandbox-exec |
+| [`permission-gate`](extensions/permission-gate/README.md) | Confirms before dangerous bash commands (rm -rf, git push --force, sudo, etc.) |
+| [`git-checkpoint`](extensions/git-checkpoint/README.md) | Git stash checkpoints at each turn so `/fork` can restore code state |
 
 ### Session & Context Management
 
 | Extension | Description |
 |-----------|-------------|
-| [`context`](pi/extensions/context/README.md) | `/context` TUI dashboard — token usage bar, loaded extensions/skills, session cost |
-| [`handoff`](pi/extensions/handoff/README.md) | Transfer context to a new focused session — generates a self-contained prompt |
-| [`recorder`](pi/extensions/recorder/README.md) | Record all session activity to SQLite for performance tracking and analytics |
+| [`context`](extensions/context/README.md) | `/context` TUI dashboard — token usage bar, loaded extensions/skills, session cost |
+| [`handoff`](extensions/handoff/README.md) | Transfer context to a new focused session — generates a self-contained prompt |
+| [`recorder`](extensions/recorder/README.md) | Record all session activity to SQLite for performance tracking and analytics |
 
 ### Workflow & Automation
 
 | Extension | Description |
 |-----------|-------------|
-| [`plan-mode`](pi/extensions/plan-mode/README.md) | Read-only exploration mode — forces planning before execution with progress tracking |
-| [`cron`](pi/extensions/cron/README.md) | `/cron 5m <prompt>` — periodic polling and monitoring on a schedule |
-| [`loop`](pi/extensions/loop/README.md) | `/loop` — repeat until tests pass, custom condition, or agent decides done |
-| [`subagent`](pi/extensions/subagent/README.md) | Delegate tasks to specialized subagents with isolated context (single, parallel, chain) |
+| [`plan-mode`](extensions/plan-mode/README.md) | Read-only exploration mode — forces planning before execution with progress tracking |
+| [`cron`](extensions/cron/README.md) | `/cron 5m <prompt>` — periodic polling and monitoring on a schedule |
+| [`loop`](extensions/loop/README.md) | `/loop` — repeat until tests pass, custom condition, or agent decides done |
+| [`subagent`](extensions/subagent/README.md) | Delegate tasks to specialized subagents with isolated context (single, parallel, chain) |
 | [`pi-interactive-shell`](https://github.com/nicobailon/pi-interactive-shell) | Full PTY emulation for interactive CLIs — user can observe and take over anytime |
 
 ### Search & Web
 
 | Extension | Description |
 |-----------|-------------|
-| [`github-search`](pi/extensions/github-search/README.md) | Search code across GitHub repositories via the `gh` CLI |
-| [`jina`](pi/extensions/jina/README.md) | Fetch webpages and return clean markdown via Jina AI's Reader API |
+| [`github-search`](extensions/github-search/README.md) | Search code across GitHub repositories via the `gh` CLI |
+| [`jina`](extensions/jina/README.md) | Fetch webpages and return clean markdown via Jina AI's Reader API |
 
 ### Environment & Integration
 
 | Extension | Description |
 |-----------|-------------|
-| [`direnv`](pi/extensions/direnv/README.md) | Auto-load direnv environment variables on session start and after bash commands |
+| [`direnv`](extensions/direnv/README.md) | Auto-load direnv environment variables on session start and after bash commands |
 | [`pi-mcp-adapter`](https://github.com/nicobailon/pi-mcp-adapter) | Token-efficient MCP (Model Context Protocol) adapter — use any MCP server from pi |
-| [`together-provider`](pi/extensions/together-provider/README.md) | Together AI model provider with 25+ open-source models (Llama, DeepSeek, Qwen, etc.) |
+| [`together-provider`](extensions/together-provider/README.md) | Together AI model provider with 25+ open-source models (Llama, DeepSeek, Qwen, etc.) |
 
 ### Input & Voice
 
 | Extension | Description |
 |-----------|-------------|
-| [`voice`](pi/extensions/voice/README.md) | Toggle-to-record speech-to-text — Groq, OpenAI, or local Whisper daemon. `Ctrl+Alt+V` or `/voice` |
-| [`inline-bash`](pi/extensions/inline-bash/README.md) | Expand `!{command}` patterns in prompts — e.g. `The branch is !{git branch --show-current}` |
-| [`questionnaire`](pi/extensions/questionnaire/README.md) | Structured multi-question UI with options and free-text input |
+| [`voice`](extensions/voice/README.md) | Toggle-to-record speech-to-text — Groq, OpenAI, or local Whisper daemon. `Ctrl+Alt+V` or `/voice` |
+| [`inline-bash`](extensions/inline-bash/README.md) | Expand `!{command}` patterns in prompts — e.g. `The branch is !{git branch --show-current}` |
+| [`questionnaire`](extensions/questionnaire/README.md) | Structured multi-question UI with options and free-text input |
 
 ### UI & Commands
 
 | Extension | Description |
 |-----------|-------------|
-| [`notify`](pi/extensions/notify/README.md) | Desktop notifications when the agent finishes (Ghostty, iTerm2, Kitty, WezTerm, WSL) |
-| [`footer`](pi/extensions/footer/README.md) | Custom footer with git branch, context usage, and extension statuses |
-| [`exit`](pi/extensions/exit/exit.ts) | `/exit` command — alias for `/quit` |
-| [`git-commit-context`](pi/extensions/git-commit-context/README.md) | `/commit` command with git status/log context injection |
+| [`notify`](extensions/notify/README.md) | Desktop notifications when the agent finishes (Ghostty, iTerm2, Kitty, WezTerm, WSL) |
+| [`footer`](extensions/footer/README.md) | Custom footer with git branch, context usage, and extension statuses |
+| [`exit`](extensions/exit/exit.ts) | `/exit` command — alias for `/quit` |
+| [`git-commit-context`](extensions/git-commit-context/README.md) | `/commit` command with git status/log context injection |
 
 ## Skills
 
@@ -136,12 +136,12 @@ Agent definitions for pi-coding-agent. Each agent is a lean system prompt that l
 
 | Agent | Description |
 |-------|-------------|
-| [`brainstormer`](pi/agents/brainstormer.md) | Collaborative design dialogue — explores ideas before implementation |
-| [`debugger`](pi/agents/debugger.md) | Systematic debugging specialist with root cause analysis |
-| [`planner`](pi/agents/planner.md) | Creates bite-sized implementation plans from context and requirements |
-| [`reviewer`](pi/agents/reviewer.md) | Code review for quality, security, and maintainability |
-| [`scout`](pi/agents/scout.md) | Fast codebase reconnaissance that returns compressed context for handoff |
-| [`worker`](pi/agents/worker.md) | General-purpose implementation with TDD, verification, and debugging |
+| [`brainstormer`](agents/brainstormer.md) | Collaborative design dialogue — explores ideas before implementation |
+| [`debugger`](agents/debugger.md) | Systematic debugging specialist with root cause analysis |
+| [`planner`](agents/planner.md) | Creates bite-sized implementation plans from context and requirements |
+| [`reviewer`](agents/reviewer.md) | Code review for quality, security, and maintainability |
+| [`scout`](agents/scout.md) | Fast codebase reconnaissance that returns compressed context for handoff |
+| [`worker`](agents/worker.md) | General-purpose implementation with TDD, verification, and debugging |
 
 ## Prompts
 
@@ -149,10 +149,10 @@ Workflow templates that orchestrate agents into chains via the subagent extensio
 
 | Prompt | Description |
 |--------|-------------|
-| [`/brainstorm`](pi/prompts/brainstorm.md) | Collaborative design dialogue |
-| [`/debug`](pi/prompts/debug.md) | Systematic debugging — scout gathers context, debugger investigates |
-| [`/full-cycle`](pi/prompts/full-cycle.md) | Full lifecycle — scout → planner → worker → reviewer → worker |
-| [`/review`](pi/prompts/review.md) | Standalone code review of recent changes or specified files |
+| [`/brainstorm`](prompts/brainstorm.md) | Collaborative design dialogue |
+| [`/debug`](prompts/debug.md) | Systematic debugging — scout gathers context, debugger investigates |
+| [`/full-cycle`](prompts/full-cycle.md) | Full lifecycle — scout → planner → worker → reviewer → worker |
+| [`/review`](prompts/review.md) | Standalone code review of recent changes or specified files |
 
 ## Packages
 

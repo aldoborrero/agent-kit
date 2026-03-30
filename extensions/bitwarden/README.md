@@ -66,5 +66,5 @@ Returns item names and usernames only - no sensitive data.
 ## Usage
 
 ```bash
-pi -e ./pi/extensions/bitwarden/bitwarden.ts
+pi -e ./extensions/bitwarden/bitwarden.ts
 ```

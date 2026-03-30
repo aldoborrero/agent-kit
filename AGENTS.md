@@ -8,15 +8,14 @@ agent-kit is a toolkit for AI coding agents providing skills, extensions, themes
 
 ```
 agent-kit/
+├── agents/           # Agent definitions (scout, planner, worker, reviewer, debugger, brainstormer)
+├── extensions/       # TypeScript extensions (32 local + 3 external npm packages)
+├── prompts/          # Workflow templates (brainstorm, debug, full-cycle, review)
 ├── skills/           # Markdown-based agent instructions
 │   ├── ast-grep/     # AST-based structural code search
 │   ├── kagi-search/  # Privacy-focused web search
 │   ├── pexpect-cli/  # Interactive CLI automation
 │   └── superpowers/  # 13 workflow skills (brainstorming, TDD, debugging, etc.)
-├── pi/
-│   ├── agents/       # Agent definitions (scout, planner, worker, reviewer, debugger, brainstormer)
-│   ├── extensions/   # TypeScript extensions (32 local + 3 external npm packages)
-│   └── prompts/      # Workflow templates (brainstorm, debug, full-cycle, review)
 ├── themes/           # Color themes (lavender)
 └── packages/         # Nix packages (pexpect-cli)
 ```
@@ -95,7 +94,7 @@ agent-kit/
 - Skills under `superpowers/` get `/superpowers:*` namespace commands via skill-namespaces extension
 - Compatible with both Claude Code and pi-coding-agent
 
-### Pi Extensions (`pi/extensions/`)
+### Pi Extensions (`extensions/`)
 - TypeScript files that register tools with pi-coding-agent
 - Use event hooks (`session_start`, `tool_result`, etc.) for side effects
 - Prefer simple solutions over tool replacement
@@ -123,7 +122,7 @@ nix fmt              # Format code
 
 ### Testing Extensions
 ```bash
-pi -e ./pi/extensions/example/example.ts
+pi -e ./extensions/example/example.ts
 ```
 
 ### Installing to pi-coding-agent
@@ -140,7 +139,7 @@ pi install git:github.com/aldoborrero/agent-kit
 4. Include examples the agent can follow
 
 ### New Extension
-1. Create `pi/extensions/<name>/<name>.ts`
+1. Create `extensions/<name>/<name>.ts`
 2. Add README.md documenting the extension
 3. Register tools via `pi.registerTool()` or use event hooks
 4. Add to `package.json` under `pi.extensions`
@@ -195,7 +194,7 @@ Entries in `pi.extensions` are resolved as **relative paths from the package roo
 {
   "pi": {
     "extensions": [
-      "pi/extensions/my-ext",              // local directory
+      "extensions/my-ext",              // local directory
       "node_modules/pi-lsp-extension"      // npm package (must use node_modules/ path)
     ]
   }
