@@ -17,6 +17,7 @@
     "url": "https://github.com/aldoborrero/agent-kit.git"
   },
   "dependencies": {
+    "codex-plugin-cc": "github:openai/codex-plugin-cc",
     "pi-lsp-extension": "github:samfoy/pi-lsp-extension",
     "pi-mcp-adapter": "github:nicobailon/pi-mcp-adapter",
     "pi-interactive-shell": "github:nicobailon/pi-interactive-shell"

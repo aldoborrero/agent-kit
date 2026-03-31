@@ -17,15 +17,16 @@
  * Requires: `codex` CLI installed globally (`npm i -g @openai/codex`).
  */
 
+import { createRequire } from "node:module";
 import * as path from "node:path";
-import { fileURLToPath } from "node:url";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
+// Resolve the codex-plugin-cc package location robustly via require.resolve,
+// which handles hoisting regardless of where node_modules actually lives.
+const require = createRequire(import.meta.url);
+const pluginPkgPath = require.resolve("codex-plugin-cc/package.json");
 const COMPANION_SCRIPT = path.join(
-	__dirname,
-	"node_modules",
-	"codex-plugin-cc",
+	path.dirname(pluginPkgPath),
 	"plugins",
 	"codex",
 	"scripts",
@@ -37,15 +38,18 @@ const EXEC_TIMEOUT = 10 * 60 * 1000; // 10 minutes
 async function runCompanion(
 	pi: ExtensionAPI,
 	subcommand: string,
-	args: string,
+	rawArgs: string,
 	timeout = EXEC_TIMEOUT,
 ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
-	// Build the full command: node <script> <subcommand> <args>
-	const shellCmd = args.trim()
-		? `node "${COMPANION_SCRIPT}" ${subcommand} ${args}`
-		: `node "${COMPANION_SCRIPT}" ${subcommand}`;
+	// codex-companion.mjs accepts: node <script> <subcommand> [args...]
+	// When argv.length === 1, it internally calls splitRawArgumentString
+	// to handle quoted strings. We pass the raw args as a single string
+	// to preserve that behavior (e.g. quoted task prompts).
+	const nodeArgs = rawArgs.trim()
+		? [COMPANION_SCRIPT, subcommand, rawArgs.trim()]
+		: [COMPANION_SCRIPT, subcommand];
 
-	const result = await pi.exec("bash", ["-c", shellCmd], { timeout });
+	const result = await pi.exec("node", nodeArgs, { timeout });
 	return {
 		stdout: result.stdout ?? "",
 		stderr: result.stderr ?? "",
