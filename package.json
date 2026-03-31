@@ -74,6 +74,7 @@
       "extensions/voice",
       "extensions/context",
       "extensions/walkie",
+      "extensions/codex",
       "node_modules/pi-lsp-extension",
       "node_modules/pi-mcp-adapter",
       "node_modules/pi-interactive-shell"
