@@ -14,5 +14,8 @@
 		"extensions": [
 			"./index.ts"
 		]
+	},
+	"dependencies": {
+		"codex-plugin-cc": "github:openai/codex-plugin-cc"
 	}
 }
