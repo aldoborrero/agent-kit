@@ -63,4 +63,12 @@ export default function (pi: ExtensionAPI) {
     if (event.toolName !== "bash") return;
     loadDirenv(ctx.cwd, ctx);
   });
+
+  pi.registerCommand("direnv", {
+    description: "Reload direnv environment variables",
+    handler: async (_args, ctx) => {
+      loadDirenv(ctx.cwd, ctx);
+      ctx.ui.notify("direnv reloaded", "info");
+    },
+  });
 }
