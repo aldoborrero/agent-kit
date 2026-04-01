@@ -20,7 +20,7 @@ pi -e ./extensions/notify/notify.ts
 ```
 agent-kit/
 ├── agents/           # Agent definitions (6 agents)
-├── extensions/       # TypeScript extensions (32 local + 3 npm)
+├── extensions/       # TypeScript extensions (33 local + 3 npm)
 ├── prompts/          # Workflow templates (4 prompts)
 ├── skills/           # Markdown skills (Claude Code + pi-coding-agent)
 │   ├── ast-grep/     # AST-based structural code search
@@ -33,38 +33,43 @@ agent-kit/
 
 ## Pi Extensions
 
-TypeScript extensions for [pi-coding-agent](https://github.com/badlogic/pi-mono). 24 local extensions + 3 external npm packages.
+TypeScript extensions for [pi-coding-agent](https://github.com/badlogic/pi-mono). 33 local extensions + 3 external npm packages.
 
-### Code Intelligence
+### Code Intelligence & Review
 
 | Extension | Description |
 |-----------|-------------|
 | [`ast-grep`](extensions/ast-grep/README.md) | Structural code search using AST patterns with pattern, rule, and inspect modes |
-| [`pi-lsp-extension`](https://github.com/samfoy/pi-lsp-extension) | LSP integration — diagnostics, hover, go-to-definition, references, symbols, rename, completions |
+| [`tuicr`](extensions/tuicr/tuicr.ts) | Interactive code review tool — agent launches tuicr, captures your review feedback |
+| [`diff`](extensions/diff/diff.ts) | `/diff` command — interactive diff viewer (tuicr/delta/git) |
+| [`codex`](extensions/codex/index.ts) | OpenAI Codex integration — `/codex:review`, `/codex:rescue`, adversarial reviews |
+| [`pi-lsp-extension`](https://github.com/samfoy/pi-lsp-extension) | LSP integration — diagnostics, hover, go-to-definition, references, symbols, rename |
 
 ### Safety & Guardrails
 
 | Extension | Description |
 |-----------|-------------|
-| [`sandbox`](extensions/sandbox/README.md) | OS-level sandboxing for bash — filesystem and network restrictions via bubblewrap/sandbox-exec |
+| [`sandbox`](extensions/sandbox/README.md) | OS-level sandboxing for bash — `/sandbox on/off` |
 | [`permission-gate`](extensions/permission-gate/README.md) | Confirms before dangerous bash commands (rm -rf, git push --force, sudo, etc.) |
 | [`git-checkpoint`](extensions/git-checkpoint/README.md) | Git stash checkpoints at each turn so `/fork` can restore code state |
+| [`bitwarden`](extensions/bitwarden/README.md) | Secure vault access via rbw — `bw_get`/`bw_list` tools with password masking |
 
 ### Session & Context Management
 
 | Extension | Description |
 |-----------|-------------|
 | [`context`](extensions/context/README.md) | `/context` TUI dashboard — token usage bar, loaded extensions/skills, session cost |
-| [`handoff`](extensions/handoff/README.md) | Transfer context to a new focused session — generates a self-contained prompt |
+| [`handoff`](extensions/handoff/README.md) | `/handoff <goal>` — transfer context to a new focused session |
+| [`btw`](extensions/btw/btw.ts) | `/btw <question>` — ephemeral side question (no tools, no context pollution) |
 | [`recorder`](extensions/recorder/README.md) | Record all session activity to SQLite for performance tracking and analytics |
 
 ### Workflow & Automation
 
 | Extension | Description |
 |-----------|-------------|
-| [`plan-mode`](extensions/plan-mode/README.md) | Read-only exploration mode — forces planning before execution with progress tracking |
-| [`cron`](extensions/cron/README.md) | `/cron 5m <prompt>` — periodic polling and monitoring on a schedule |
-| [`loop`](extensions/loop/README.md) | `/loop` — repeat until tests pass, custom condition, or agent decides done |
+| [`plan-mode`](extensions/plan-mode/README.md) | `/plan` — read-only exploration with subagent orchestration and plan file output |
+| [`loop`](extensions/loop/README.md) | `/loop 5m <prompt>` — periodic polling and monitoring on a schedule |
+| [`until`](extensions/until/README.md) | `/until tests` — repeat until condition met (TDD, iterative fixes) |
 | [`subagent`](extensions/subagent/README.md) | Delegate tasks to specialized subagents with isolated context (single, parallel, chain) |
 | [`pi-interactive-shell`](https://github.com/nicobailon/pi-interactive-shell) | Full PTY emulation for interactive CLIs — user can observe and take over anytime |
 
@@ -72,31 +77,42 @@ TypeScript extensions for [pi-coding-agent](https://github.com/badlogic/pi-mono)
 
 | Extension | Description |
 |-----------|-------------|
-| [`github-search`](extensions/github-search/README.md) | Search code across GitHub repositories via the `gh` CLI |
+| [`exa-search`](extensions/exa-search/README.md) | AI-powered web search via Exa — neural, fast, deep modes with domain filtering |
+| [`brave-search`](extensions/brave-search/README.md) | Privacy-focused web search via Brave — recency filtering, free tier |
+| [`github-search`](extensions/github-search/README.md) | Search code, issues, and PRs on GitHub via `gh` CLI |
 | [`jina`](extensions/jina/README.md) | Fetch webpages and return clean markdown via Jina AI's Reader API |
+
+### Model Providers
+
+| Extension | Description |
+|-----------|-------------|
+| [`openrouter-provider`](extensions/openrouter-provider/README.md) | Kimi K2.5, Gemini, Grok, Devstral, ByteDance — one API key for all |
+| [`groq-provider`](extensions/groq-provider/README.md) | GPT-OSS 120B/20B, Qwen3, Llama 4 Scout — ultra-fast LPU inference |
+| [`together-provider`](extensions/together-provider/README.md) | Llama, DeepSeek, Qwen, Kimi, GLM, Mistral — 25+ open-source models |
 
 ### Environment & Integration
 
 | Extension | Description |
 |-----------|-------------|
-| [`direnv`](extensions/direnv/README.md) | Auto-load direnv environment variables on session start and after bash commands |
-| [`pi-mcp-adapter`](https://github.com/nicobailon/pi-mcp-adapter) | Token-efficient MCP (Model Context Protocol) adapter — use any MCP server from pi |
-| [`together-provider`](extensions/together-provider/README.md) | Together AI model provider with 25+ open-source models (Llama, DeepSeek, Qwen, etc.) |
+| [`direnv`](extensions/direnv/README.md) | Auto-load direnv environment variables — `/direnv` to reload on demand |
+| [`walkie`](extensions/walkie/README.md) | Telegram bridge for mobile — bidirectional messaging, voice, photos, draft streaming |
+| [`pi-mcp-adapter`](https://github.com/nicobailon/pi-mcp-adapter) | Token-efficient MCP (Model Context Protocol) adapter |
 
 ### Input & Voice
 
 | Extension | Description |
 |-----------|-------------|
-| [`voice`](extensions/voice/README.md) | Toggle-to-record speech-to-text — Groq, OpenAI, or local Whisper daemon. `Ctrl+Alt+V` or `/voice` |
-| [`inline-bash`](extensions/inline-bash/README.md) | Expand `!{command}` patterns in prompts — e.g. `The branch is !{git branch --show-current}` |
+| [`voice`](extensions/voice/README.md) | Toggle-to-record speech-to-text — Groq, OpenAI, or local Whisper daemon. `Ctrl+Alt+V` |
+| [`inline-bash`](extensions/inline-bash/README.md) | Expand `!{command}` patterns in prompts |
 | [`questionnaire`](extensions/questionnaire/README.md) | Structured multi-question UI with options and free-text input |
 
 ### UI & Commands
 
 | Extension | Description |
 |-----------|-------------|
-| [`notify`](extensions/notify/README.md) | Desktop notifications when the agent finishes (Ghostty, iTerm2, Kitty, WezTerm, WSL) |
+| [`notify`](extensions/notify/README.md) | Desktop notifications when the agent finishes |
 | [`footer`](extensions/footer/README.md) | Custom footer with git branch, context usage, and extension statuses |
+| [`skill-namespaces`](extensions/skill-namespaces/skill-namespaces.ts) | `/superpowers:*` namespaced skill commands in autocomplete |
 | [`exit`](extensions/exit/exit.ts) | `/exit` command — alias for `/quit` |
 | [`git-commit-context`](extensions/git-commit-context/README.md) | `/commit` command with git status/log context injection |
 
