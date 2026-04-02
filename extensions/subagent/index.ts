@@ -23,6 +23,7 @@ import { type ExtensionAPI, getMarkdownTheme } from "@mariozechner/pi-coding-age
 import { Container, Markdown, Spacer, Text } from "@mariozechner/pi-tui";
 import { Type } from "@sinclair/typebox";
 import { type AgentConfig, type AgentScope, discoverAgents } from "./agents.js";
+import { discoverPrompts } from "./prompts.js";
 
 const MAX_PARALLEL_TASKS = 8;
 const MAX_CONCURRENCY = 4;
@@ -958,6 +959,22 @@ export default function (pi: ExtensionAPI) {
 
 			const text = result.content[0];
 			return new Text(text?.type === "text" ? text.text : "(no output)", 0, 0);
+		},
+	});
+
+	// Register /prompts command to list available prompt commands
+	// (Prompts are automatically registered as slash commands by pi's built-in prompt handling)
+	pi.registerCommand("prompts", {
+		description: "List available prompt commands",
+		handler: async (_args, ctx) => {
+			const prompts = discoverPrompts(ctx.cwd);
+			if (prompts.length === 0) {
+				ctx.ui.notify("No prompts found. Create .md files in a prompts/ directory.", "info");
+				return;
+			}
+
+			const lines = prompts.map((p) => `/${p.name} - ${p.description}`);
+			ctx.ui.notify(`Available prompts:\n${lines.join("\n")}`, "info");
 		},
 	});
 }

@@ -12,7 +12,7 @@ Delegate tasks to specialized subagents with isolated context windows. Each suba
 
 Run one agent on one task:
 ```json
-{ "agent": "scout", "task": "Find all files related to authentication" }
+{ "agent": "explore", "task": "Find all files related to authentication" }
 ```
 
 ### Parallel
@@ -21,8 +21,8 @@ Run multiple agents concurrently (max 8 tasks, 4 concurrent):
 ```json
 {
   "tasks": [
-    { "agent": "scout", "task": "Find API endpoint files" },
-    { "agent": "scout", "task": "Find test files for auth" }
+    { "agent": "explore", "task": "Find API endpoint files" },
+    { "agent": "explore", "task": "Find test files for auth" }
   ]
 }
 ```
@@ -33,9 +33,9 @@ Run agents sequentially, passing output from one to the next via `{previous}`:
 ```json
 {
   "chain": [
-    { "agent": "scout", "task": "Find the auth module structure" },
-    { "agent": "planner", "task": "Create a plan to add OAuth based on: {previous}" },
-    { "agent": "worker", "task": "Implement the plan: {previous}" }
+    { "agent": "explore", "task": "Find the auth module structure" },
+    { "agent": "plan", "task": "Create a plan to add OAuth based on: {previous}" },
+    { "agent": "build", "task": "Implement the plan: {previous}" }
   ]
 }
 ```
@@ -79,7 +79,8 @@ Project agents override user agents with the same name when `agentScope: "both"`
 subagent/
 ├── README.md        # This file
 ├── index.ts         # Tool registration and execution logic
-└── agents.ts        # Agent discovery and configuration
+├── agents.ts        # Agent discovery and configuration
+└── prompts.ts       # Prompt discovery and slash command registration
 ```
 
 ## Security Model
@@ -113,6 +114,41 @@ To enable project-local agents, pass `agentScope: "both"` (or `"project"`). When
 - **stopReason "error"**: LLM error propagated with error message
 - **stopReason "aborted"**: Ctrl+C kills subprocess
 - **Chain mode**: Stops at first failing step
+
+## Prompts as Slash Commands
+
+Pi automatically registers markdown files from `prompts/` directories as slash commands.
+The subagent extension adds a `/prompts` command to list what's available.
+
+### Prompt File Format
+
+```markdown
+---
+description: Fast codebase reconnaissance
+---
+Use the subagent tool to run the "explore" agent with the following task: $@
+```
+
+The `$@` placeholder is replaced with whatever the user types after the command.
+
+### Example Commands
+
+If you have `prompts/scout.md`:
+```
+/scout find authentication code
+```
+
+This executes the template with `$@` replaced by `"find authentication code"`.
+
+### Pre-defined Prompts
+
+| Command | Description |
+|---------|-------------|
+| `/scout <task>` | Fast codebase reconnaissance |
+| `/brainstorm <topic>` | Collaborative design dialogue |
+| `/debug <issue>` | Systematic debugging with scout → debugger chain |
+| `/review <files>` | Standalone code review |
+| `/full-cycle <feature>` | Complete workflow: scout → plan → implement → review |
 
 ## Limits
 
