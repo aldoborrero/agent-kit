@@ -1,9 +1,22 @@
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 
+const API_KEY_ENV = "TOGETHER_API_KEY";
+
 export default function (pi: ExtensionAPI) {
+  pi.on("session_start", async (_event, ctx) => {
+    if (process.env[API_KEY_ENV]) {
+      if (ctx.hasUI) ctx.ui.setStatus("together", undefined);
+      return;
+    }
+    if (ctx.hasUI) {
+      ctx.ui.setStatus("together", ctx.ui.theme.fg("warning", "together:no-key"));
+      ctx.ui.notify(`Together provider loaded, but ${API_KEY_ENV} is not set`, "warning");
+    }
+  });
+
   pi.registerProvider("together", {
     baseUrl: "https://api.together.xyz/v1",
-    apiKey: "TOGETHER_API_KEY",
+    apiKey: API_KEY_ENV,
     api: "openai-completions",
     models: [
       // Llama 4

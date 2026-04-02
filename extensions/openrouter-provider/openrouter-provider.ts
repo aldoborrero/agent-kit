@@ -11,10 +11,23 @@
 
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 
+const API_KEY_ENV = "OPENROUTER_API_KEY";
+
 export default function (pi: ExtensionAPI) {
+	pi.on("session_start", async (_event, ctx) => {
+		if (process.env[API_KEY_ENV]) {
+			if (ctx.hasUI) ctx.ui.setStatus("openrouter", undefined);
+			return;
+		}
+		if (ctx.hasUI) {
+			ctx.ui.setStatus("openrouter", ctx.ui.theme.fg("warning", "or:no-key"));
+			ctx.ui.notify(`OpenRouter provider loaded, but ${API_KEY_ENV} is not set`, "warning");
+		}
+	});
+
 	pi.registerProvider("openrouter", {
 		baseUrl: "https://openrouter.ai/api/v1",
-		apiKey: "OPENROUTER_API_KEY",
+		apiKey: API_KEY_ENV,
 		api: "openai-completions",
 		models: [
 			// ── Moonshot AI ──────────────────────────────────────────

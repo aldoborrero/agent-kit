@@ -10,10 +10,23 @@
 
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 
+const API_KEY_ENV = "GROQ_API_KEY";
+
 export default function (pi: ExtensionAPI) {
+	pi.on("session_start", async (_event, ctx) => {
+		if (process.env[API_KEY_ENV]) {
+			if (ctx.hasUI) ctx.ui.setStatus("groq", undefined);
+			return;
+		}
+		if (ctx.hasUI) {
+			ctx.ui.setStatus("groq", ctx.ui.theme.fg("warning", "groq:no-key"));
+			ctx.ui.notify(`Groq provider loaded, but ${API_KEY_ENV} is not set`, "warning");
+		}
+	});
+
 	pi.registerProvider("groq", {
 		baseUrl: "https://api.groq.com/openai/v1",
-		apiKey: "GROQ_API_KEY",
+		apiKey: API_KEY_ENV,
 		api: "openai-completions",
 		models: [
 			// ── Tier 1: Best coding quality ──────────────────────────
