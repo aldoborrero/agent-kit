@@ -1,5 +1,5 @@
 ---
-name: planner
+name: plan
 description: Creates implementation plans from context and requirements
 tools: read, grep, find, ls
 model: claude-opus-4-6
