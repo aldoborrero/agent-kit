@@ -431,6 +431,16 @@ export default function walkieExtension(pi: ExtensionAPI) {
 
   // ─── Helpers ─────────────────────────────────────────────────────────────
 
+  async function reloadConfigForCwd(ctx: ExtensionContext): Promise<void> {
+    config = { enabled: true, streaming: true, ...loadConfigSync(), ...loadProjectConfigSync(ctx.cwd) };
+    cachedVoiceConfig = loadVoiceConfigSync();
+    updateStatus(ctx);
+
+    if (isConfigured(config)) {
+      await registerBotCommands(config.botToken, config.chatId);
+    }
+  }
+
   function updateStatus(ctx: ExtensionContext): void {
     if (!ctx.hasUI) return;
     const { theme, setStatus } = ctx.ui;
@@ -481,12 +491,22 @@ export default function walkieExtension(pi: ExtensionAPI) {
       } catch (err) {
         if (!(err instanceof tg.TelegramError && err.statusCode === 400)) continue;
 
-        // HTML parse failure on chunk i — fall back to plain text for this and all
-        // remaining chunks. Chunks 0…i-1 were already sent successfully as HTML.
-        // Re-chunk the original plain text; in practice 400 fires on chunk 0 so
-        // i === 0 and the full text is retried as plain with no duplicate sends.
-        const plainChunks = chunkText(text);
-        for (let j = i; j < plainChunks.length; j++) {
+        // HTML parse failure on chunk i — fall back to plain text for the
+        // UNSENT remainder only. We must not reuse the same chunk index against
+        // chunkText(text): HTML chunk boundaries differ from plain-text chunk
+        // boundaries, which can skip or duplicate content. Instead, derive the
+        // remaining payload from the unsent formatted chunks and strip the small
+        // Telegram HTML subset we generate.
+        const remainingHtml = chunks.slice(i).join("");
+        const remainingPlain = remainingHtml
+          .replace(/<a\s+href="([^"]*)">/gi, "")
+          .replace(/<\/?(?:b|i|s|code|pre|a)>/gi, "")
+          .replace(/&lt;/g, "<")
+          .replace(/&gt;/g, ">")
+          .replace(/&amp;/g, "&");
+
+        const plainChunks = chunkText(remainingPlain);
+        for (let j = 0; j < plainChunks.length; j++) {
           const plainIsLast = j === plainChunks.length - 1;
           const plainMarkup = plainIsLast && reply_markup ? { reply_markup } : {};
           const msg = await tg.sendMessage(botToken, chatId, plainChunks[j]!, {
@@ -922,10 +942,7 @@ export default function walkieExtension(pi: ExtensionAPI) {
     // Merge: global defaults ← global config ← project-local overrides
     // Project-local (~/<cwd>/.pi/walkie.json) holds topicId/topicName so each
     // pi instance in a different project has its own topic without collision.
-    config = { enabled: true, streaming: true, ...loadConfigSync(), ...loadProjectConfigSync(ctx.cwd) };
-    cachedVoiceConfig = loadVoiceConfigSync();
-
-    updateStatus(ctx);
+    await reloadConfigForCwd(ctx);
 
     if (!config.botToken) return;
     // Skip updates that accumulated while pi was offline, then start polling.
@@ -950,6 +967,7 @@ export default function walkieExtension(pi: ExtensionAPI) {
 
   pi.on("session_switch", async (_event, ctx) => {
     lastCtx = ctx;
+    await reloadConfigForCwd(ctx);
     if (!isActive(config)) return;
     const projectName = config.topicName ?? basename(ctx.cwd);
     await sendPlain(`📂 Session switched · ${projectName}`).catch(() => {});
@@ -957,7 +975,12 @@ export default function walkieExtension(pi: ExtensionAPI) {
 
   pi.on("before_agent_start", async (_event, _ctx) => {
     if (!isActive(config)) return;
-    return { systemPrompt: CHOICES_SYSTEM_PROMPT };
+    return {
+      message: {
+        content: CHOICES_SYSTEM_PROMPT,
+        display: false,
+      },
+    };
   });
 
   pi.on("agent_start", async (_event, ctx) => {
@@ -1172,16 +1195,19 @@ export default function walkieExtension(pi: ExtensionAPI) {
 
           // Optional: topic ID for forum-group multi-project routing
           const currentTopic = config.topicId ? `Current: ${config.topicId}` : "none";
-          const topicHint = `Forum topic ID (message_thread_id) — leave blank for private chat / no topic. Current: ${currentTopic}`;
+          const topicHint = `Forum topic ID (message_thread_id) — leave blank to clear / use no topic. Current: ${currentTopic}`;
           const topicInput = await ctx.ui.input("Topic ID (optional)", topicHint);
           if (topicInput !== null) {
-            const tid = parseInt(topicInput.trim(), 10);
+            const trimmedTopic = topicInput.trim();
+            const tid = parseInt(trimmedTopic, 10);
             if (!isNaN(tid) && tid > 0) {
               config.topicId = tid;
-            } else if (topicInput.trim() === "") {
-              // blank = keep existing or none
+            } else if (trimmedTopic === "") {
+              config.topicId = undefined;
+              config.topicName = undefined;
             } else {
-              config.topicId = undefined; // clear if invalid
+              config.topicId = undefined;
+              config.topicName = undefined;
             }
           }
 
@@ -1210,14 +1236,15 @@ export default function walkieExtension(pi: ExtensionAPI) {
 
           config.enabled = true;
           await persistConfig(config);
-          if (config.topicId !== undefined) {
-            await persistProjectConfig(ctx.cwd, { topicId: config.topicId, topicName: config.topicName });
-          }
+          await persistProjectConfig(ctx.cwd, { topicId: config.topicId, topicName: config.topicName });
           updateStatus(ctx);
 
-          // Restart polling with the new token
+          // Restart polling with the new token, skipping backlog accumulated while offline
           stopPolling();
-          startPolling().catch(() => {});
+          const initialOffset = config.botToken
+            ? await tg.getNextUpdateOffset(config.botToken).catch(() => 0)
+            : 0;
+          startPolling(initialOffset).catch(() => {});
 
           ctx.ui.notify(
             "📱 Send any message to your Telegram bot to pair this chat (expires in 5 min).",
@@ -1233,7 +1260,8 @@ export default function walkieExtension(pi: ExtensionAPI) {
           updateStatus(ctx);
 
           if (isConfigured(config) && !pollingAbort) {
-            startPolling().catch(() => {});
+            const initialOffset = await tg.getNextUpdateOffset(config.botToken).catch(() => 0);
+            startPolling(initialOffset).catch(() => {});
           }
           ctx.ui.notify("Walkie started", "info");
           break;
