@@ -1,3 +1,5 @@
+/// <reference path="./node-shim.d.ts" />
+
 /**
  * Codex Extension — use OpenAI Codex from pi to review code or delegate tasks.
  *
@@ -6,13 +8,13 @@
  * reviews, structured output, thread management, and job tracking.
  *
  * Commands:
- *   /codex:setup              — check Codex CLI readiness and auth
- *   /codex:review             — run a native code review via Codex
- *   /codex:adversarial-review — adversarial review questioning design choices
- *   /codex:rescue             — delegate a task to Codex
- *   /codex:status             — show running and recent Codex jobs
- *   /codex:result             — display output from a completed job
- *   /codex:cancel             — cancel an active background job
+ *   /codex setup              — check Codex CLI readiness and auth
+ *   /codex review             — run a native code review via Codex
+ *   /codex adversarial-review — adversarial review questioning design choices
+ *   /codex rescue             — delegate a task to Codex
+ *   /codex status             — show running and recent Codex jobs
+ *   /codex result             — display output from a completed job
+ *   /codex cancel             — cancel an active background job
  *
  * Requires: `codex` CLI installed globally (`npm i -g @openai/codex`).
  */
@@ -53,7 +55,7 @@ async function runCompanion(
   return {
     stdout: result.stdout ?? "",
     stderr: result.stderr ?? "",
-    exitCode: result.exitCode ?? 1,
+    exitCode: (result as { exitCode?: number }).exitCode ?? 1,
   };
 }
 
@@ -75,80 +77,96 @@ function formatOutput(result: {
 }
 
 export default function (pi: ExtensionAPI) {
-  // ── /codex:setup ──────────────────────────────────────────────────────
-  pi.registerCommand("codex:setup", {
-    description:
-      "Check whether the local Codex CLI is installed and authenticated",
-    handler: async (args, ctx) => {
-      const result = await runCompanion(pi, "setup", args, 30000);
-      pi.sendUserMessage(formatOutput(result), { deliverAs: "followUp" });
-    },
-  });
+  const subcommands = [
+    "setup",
+    "review",
+    "adversarial-review",
+    "rescue",
+    "status",
+    "result",
+    "cancel",
+  ] as const;
 
-  // ── /codex:review ─────────────────────────────────────────────────────
-  pi.registerCommand("codex:review", {
-    description:
-      "Run a Codex code review on uncommitted changes or a branch diff. Flags: --base <ref>, --scope <auto|working-tree|branch>",
-    handler: async (args, ctx) => {
-      ctx.ui.notify("Running Codex review…", "info");
-      const result = await runCompanion(pi, "review", args);
-      pi.sendUserMessage(formatOutput(result), { deliverAs: "followUp" });
-    },
-  });
-
-  // ── /codex:adversarial-review ─────────────────────────────────────────
-  pi.registerCommand("codex:adversarial-review", {
-    description:
-      "Adversarial review that challenges design decisions. Flags: --base <ref>, --scope <auto|working-tree|branch>. Pass focus text as positional args.",
-    handler: async (args, ctx) => {
-      ctx.ui.notify("Running Codex adversarial review…", "info");
-      const result = await runCompanion(pi, "adversarial-review", args);
-      pi.sendUserMessage(formatOutput(result), { deliverAs: "followUp" });
-    },
-  });
-
-  // ── /codex:rescue ─────────────────────────────────────────────────────
-  pi.registerCommand("codex:rescue", {
-    description:
-      "Delegate a task to Codex. Flags: --model <model>, --effort <level>, --write (allow edits). Pass task as positional args.",
-    handler: async (args, ctx) => {
-      if (!args.trim()) {
+  async function runSubcommand(subcommand: string, rawArgs: string, ctx: { ui: { notify(message: string, level: "info" | "warning" | "error"): void } }): Promise<void> {
+    switch (subcommand) {
+      case "setup": {
+        const result = await runCompanion(pi, "setup", rawArgs, 30000);
+        pi.sendUserMessage(formatOutput(result), { deliverAs: "followUp" });
+        return;
+      }
+      case "review": {
+        ctx.ui.notify("Running Codex review…", "info");
+        const result = await runCompanion(pi, "review", rawArgs);
+        pi.sendUserMessage(formatOutput(result), { deliverAs: "followUp" });
+        return;
+      }
+      case "adversarial-review": {
+        ctx.ui.notify("Running Codex adversarial review…", "info");
+        const result = await runCompanion(pi, "adversarial-review", rawArgs);
+        pi.sendUserMessage(formatOutput(result), { deliverAs: "followUp" });
+        return;
+      }
+      case "rescue": {
+        if (!rawArgs.trim()) {
+          pi.sendUserMessage(
+            "Usage: `/codex rescue <task description>` — describe what you want Codex to do.",
+            { deliverAs: "followUp" },
+          );
+          return;
+        }
+        ctx.ui.notify("Delegating task to Codex…", "info");
+        const result = await runCompanion(pi, "task", rawArgs);
+        pi.sendUserMessage(formatOutput(result), { deliverAs: "followUp" });
+        return;
+      }
+      case "status": {
+        const result = await runCompanion(pi, "status", rawArgs, 30000);
+        pi.sendUserMessage(formatOutput(result), { deliverAs: "followUp" });
+        return;
+      }
+      case "result": {
+        const result = await runCompanion(pi, "result", rawArgs, 30000);
+        pi.sendUserMessage(formatOutput(result), { deliverAs: "followUp" });
+        return;
+      }
+      case "cancel": {
+        const result = await runCompanion(pi, "cancel", rawArgs, 30000);
+        pi.sendUserMessage(formatOutput(result), { deliverAs: "followUp" });
+        return;
+      }
+      default:
         pi.sendUserMessage(
-          "Usage: `/codex:rescue <task description>` — describe what you want Codex to do.",
+          "Usage: `/codex <setup|review|adversarial-review|rescue|status|result|cancel> [args]`",
+          { deliverAs: "followUp" },
+        );
+    }
+  }
+
+  pi.registerCommand("codex", {
+    description:
+      "Use Codex via subcommands: setup | review | adversarial-review | rescue | status | result | cancel",
+    getArgumentCompletions: (prefix: string) => {
+      const trimmed = prefix.trimStart().toLowerCase();
+      if (!trimmed) return subcommands.map((value) => ({ value, label: value }));
+      const parts = trimmed.split(/\s+/).filter(Boolean);
+      if (parts.length <= 1 && !/\s$/.test(trimmed)) {
+        const sub = parts[0] ?? "";
+        const filtered = subcommands.filter((value) => value.startsWith(sub));
+        return filtered.length > 0 ? filtered.map((value) => ({ value, label: value })) : null;
+      }
+      return null;
+    },
+    handler: async (args, ctx) => {
+      const trimmed = args.trim();
+      if (!trimmed) {
+        pi.sendUserMessage(
+          "Usage: `/codex <setup|review|adversarial-review|rescue|status|result|cancel> [args]`",
           { deliverAs: "followUp" },
         );
         return;
       }
-      ctx.ui.notify("Delegating task to Codex…", "info");
-      const result = await runCompanion(pi, "task", args);
-      pi.sendUserMessage(formatOutput(result), { deliverAs: "followUp" });
-    },
-  });
-
-  // ── /codex:status ─────────────────────────────────────────────────────
-  pi.registerCommand("codex:status", {
-    description: "Show running and recent Codex jobs for this repository",
-    handler: async (args, ctx) => {
-      const result = await runCompanion(pi, "status", args, 30000);
-      pi.sendUserMessage(formatOutput(result), { deliverAs: "followUp" });
-    },
-  });
-
-  // ── /codex:result ─────────────────────────────────────────────────────
-  pi.registerCommand("codex:result", {
-    description: "Display the full output from a completed Codex job",
-    handler: async (args, ctx) => {
-      const result = await runCompanion(pi, "result", args, 30000);
-      pi.sendUserMessage(formatOutput(result), { deliverAs: "followUp" });
-    },
-  });
-
-  // ── /codex:cancel ─────────────────────────────────────────────────────
-  pi.registerCommand("codex:cancel", {
-    description: "Cancel an active background Codex job",
-    handler: async (args, ctx) => {
-      const result = await runCompanion(pi, "cancel", args, 30000);
-      pi.sendUserMessage(formatOutput(result), { deliverAs: "followUp" });
+      const [subcommand, ...rest] = trimmed.split(/\s+/);
+      await runSubcommand(subcommand.toLowerCase(), rest.join(" "), ctx);
     },
   });
 }

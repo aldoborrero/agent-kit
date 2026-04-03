@@ -42,7 +42,7 @@ TypeScript extensions for [pi-coding-agent](https://github.com/badlogic/pi-mono)
 | [`ast-grep`](extensions/ast-grep/README.md) | Structural code search using AST patterns with pattern, rule, and inspect modes |
 | [`tuicr`](extensions/tuicr/tuicr.ts) | Interactive code review tool — agent launches tuicr, captures your review feedback |
 | [`diff`](extensions/diff/diff.ts) | `/diff` command — interactive diff viewer (tuicr/delta/git) |
-| [`codex`](extensions/codex/index.ts) | OpenAI Codex integration — `/codex:review`, `/codex:rescue`, adversarial reviews |
+| [`codex`](extensions/codex/index.ts) | OpenAI Codex integration — `/codex review`, `/codex rescue`, adversarial reviews |
 | [`pi-lsp-extension`](https://github.com/samfoy/pi-lsp-extension) | LSP integration — diagnostics, hover, go-to-definition, references, symbols, rename |
 
 ### Safety & Guardrails
