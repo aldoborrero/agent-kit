@@ -6,6 +6,7 @@
  */
 
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import { createUiColors } from "../_shared/ui-colors.js";
 import {
   Editor,
   type EditorTheme,
@@ -121,6 +122,7 @@ export default function questionnaire(pi: ExtensionAPI) {
 
       const result = await ctx.ui.custom<QuestionnaireResult>(
         (tui, theme, _kb, done) => {
+          const colors = createUiColors(theme);
           // State
           let currentTab = 0;
           let optionIndex = 0;
@@ -131,13 +133,13 @@ export default function questionnaire(pi: ExtensionAPI) {
 
           // Editor for "Type something" option
           const editorTheme: EditorTheme = {
-            borderColor: (s) => theme.fg("accent", s),
+            borderColor: (s) => colors.primary(s),
             selectList: {
-              selectedPrefix: (t) => theme.fg("accent", t),
-              selectedText: (t) => theme.fg("accent", t),
-              description: (t) => theme.fg("muted", t),
-              scrollInfo: (t) => theme.fg("dim", t),
-              noMatch: (t) => theme.fg("warning", t),
+              selectedPrefix: (t) => colors.primary(t),
+              selectedText: (t) => colors.primary(t),
+              description: (t) => colors.meta(t),
+              scrollInfo: (t) => colors.subtle(t),
+              noMatch: (t) => colors.warning(t),
             },
           };
           const editor = new Editor(tui, editorTheme);
@@ -308,7 +310,7 @@ export default function questionnaire(pi: ExtensionAPI) {
             // Helper to add truncated line
             const add = (s: string) => lines.push(truncateToWidth(s, width));
 
-            add(theme.fg("accent", "─".repeat(width)));
+            add(colors.primary("─".repeat(width)));
 
             // Tab bar (multi-question only)
             if (isMulti) {
@@ -321,16 +323,16 @@ export default function questionnaire(pi: ExtensionAPI) {
                 const color = isAnswered ? "success" : "muted";
                 const text = ` ${box} ${lbl} `;
                 const styled = isActive
-                  ? theme.bg("selectedBg", theme.fg("text", text))
-                  : theme.fg(color, text);
+                  ? theme.bg("selectedBg", colors.text(text))
+                  : colors.apply(color, text);
                 tabs.push(`${styled} `);
               }
               const canSubmit = allAnswered();
               const isSubmitTab = currentTab === questions.length;
               const submitText = " ✓ Submit ";
               const submitStyled = isSubmitTab
-                ? theme.bg("selectedBg", theme.fg("text", submitText))
-                : theme.fg(canSubmit ? "success" : "dim", submitText);
+                ? theme.bg("selectedBg", colors.text(submitText))
+                : colors.apply(canSubmit ? "success" : "dim", submitText);
               tabs.push(`${submitStyled} →`);
               add(` ${tabs.join("")}`);
               lines.push("");
@@ -342,59 +344,59 @@ export default function questionnaire(pi: ExtensionAPI) {
                 const opt = opts[i];
                 const selected = i === optionIndex;
                 const isOther = opt.isOther === true;
-                const prefix = selected ? theme.fg("accent", "> ") : "  ";
+                const prefix = selected ? colors.primary("> ") : "  ";
                 const color = selected ? "accent" : "text";
                 // Mark "Type something" differently when in input mode
                 if (isOther && inputMode) {
-                  add(prefix + theme.fg("accent", `${i + 1}. ${opt.label} ✎`));
+                  add(prefix + colors.primary(`${i + 1}. ${opt.label} ✎`));
                 } else {
-                  add(prefix + theme.fg(color, `${i + 1}. ${opt.label}`));
+                  add(prefix + colors.apply(color, `${i + 1}. ${opt.label}`));
                 }
                 if (opt.description) {
-                  add(`     ${theme.fg("muted", opt.description)}`);
+                  add(`     ${colors.meta(opt.description)}`);
                 }
               }
             }
 
             // Content
             if (inputMode && q) {
-              add(theme.fg("text", ` ${q.prompt}`));
+              add(colors.text(` ${q.prompt}`));
               lines.push("");
               // Show options for reference
               renderOptions();
               lines.push("");
-              add(theme.fg("muted", " Your answer:"));
+              add(colors.meta(" Your answer:"));
               for (const line of editor.render(width - 2)) {
                 add(` ${line}`);
               }
               lines.push("");
-              add(theme.fg("dim", " Enter to submit • Esc to cancel"));
+              add(colors.subtle(" Enter to submit • Esc to cancel"));
             } else if (currentTab === questions.length) {
-              add(theme.fg("accent", theme.bold(" Ready to submit")));
+              add(colors.primary(theme.bold(" Ready to submit")));
               lines.push("");
               for (const question of questions) {
                 const answer = answers.get(question.id);
                 if (answer) {
                   const prefix = answer.wasCustom ? "(wrote) " : "";
                   add(
-                    `${theme.fg("muted", ` ${question.label}: `)}${
-                      theme.fg("text", prefix + answer.label)
+                    `${colors.meta(` ${question.label}: `)}${
+                      colors.text(prefix + answer.label)
                     }`,
                   );
                 }
               }
               lines.push("");
               if (allAnswered()) {
-                add(theme.fg("success", " Press Enter to submit"));
+                add(colors.success(" Press Enter to submit"));
               } else {
                 const missing = questions
                   .filter((q) => !answers.has(q.id))
                   .map((q) => q.label)
                   .join(", ");
-                add(theme.fg("warning", ` Unanswered: ${missing}`));
+                add(colors.warning(` Unanswered: ${missing}`));
               }
             } else if (q) {
-              add(theme.fg("text", ` ${q.prompt}`));
+              add(colors.text(` ${q.prompt}`));
               lines.push("");
               renderOptions();
             }
@@ -404,9 +406,9 @@ export default function questionnaire(pi: ExtensionAPI) {
               const help = isMulti
                 ? " Tab/←→ navigate • ↑↓ select • Enter confirm • Esc cancel"
                 : " ↑↓ navigate • Enter select • Esc cancel";
-              add(theme.fg("dim", help));
+              add(colors.subtle(help));
             }
-            add(theme.fg("accent", "─".repeat(width)));
+            add(colors.primary("─".repeat(width)));
 
             cachedLines = lines;
             return lines;
@@ -447,10 +449,11 @@ export default function questionnaire(pi: ExtensionAPI) {
       const qs = (args.questions as Question[]) || [];
       const count = qs.length;
       const labels = qs.map((q) => q.label || q.id).join(", ");
-      let text = theme.fg("toolTitle", theme.bold("questionnaire "));
-      text += theme.fg("muted", `${count} question${count !== 1 ? "s" : ""}`);
+      const colors = createUiColors(theme);
+      let text = colors.model(theme.bold("questionnaire "));
+      text += colors.meta(`${count} question${count !== 1 ? "s" : ""}`);
       if (labels) {
-        text += theme.fg("dim", ` (${truncateToWidth(labels, 40)})`);
+        text += colors.subtle(` (${truncateToWidth(labels, 40)})`);
       }
       return new Text(text, 0, 0);
     },
@@ -461,18 +464,19 @@ export default function questionnaire(pi: ExtensionAPI) {
         const text = result.content[0];
         return new Text(text?.type === "text" ? text.text : "", 0, 0);
       }
+      const colors = createUiColors(theme);
       if (details.cancelled) {
-        return new Text(theme.fg("warning", "Cancelled"), 0, 0);
+        return new Text(colors.warning("Cancelled"), 0, 0);
       }
       const lines = details.answers.map((a) => {
         if (a.wasCustom) {
-          return `${theme.fg("success", "✓ ")}${theme.fg("accent", a.id)}: ${
-            theme.fg("muted", "(wrote) ")
+          return `${colors.success("✓ ")}${colors.primary(a.id)}: ${
+            colors.meta("(wrote) ")
           }${a.label}`;
         }
         const display = a.index ? `${a.index}. ${a.label}` : a.label;
-        return `${theme.fg("success", "✓ ")}${
-          theme.fg("accent", a.id)
+        return `${colors.success("✓ ")}${
+          colors.primary(a.id)
         }: ${display}`;
       });
       return new Text(lines.join("\n"), 0, 0);
