@@ -17,13 +17,14 @@ import type { AssistantMessage, TextContent } from "@mariozechner/pi-ai";
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { Key } from "@mariozechner/pi-tui";
 import { extractTodoItems, isSafeCommand, markCompletedSteps, type TodoItem } from "./utils.js";
+import { createUiColors } from "../_shared/ui-colors.js";
 import { existsSync, readFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 
 const PLAN_DIR = ".pi/plans";
 
 // Tools
-const PLAN_MODE_TOOLS = ["read", "bash", "grep", "find", "ls", "edit", "write", "questionnaire", "subagent", "ast_grep", "exa_search", "brave_search", "github_search_code"];
+const PLAN_MODE_TOOLS = ["read", "bash", "grep", "find", "ls", "edit", "write", "questionnaire", "subagent", "ast_grep", "web_search", "web_fetch", "github_search_code"];
 const NORMAL_MODE_TOOLS = ["read", "bash", "edit", "write"];
 
 // Type guard for assistant messages
@@ -85,12 +86,14 @@ export default function planModeExtension(pi: ExtensionAPI): void {
 	});
 
 	function updateStatus(ctx: ExtensionContext): void {
+		const colors = createUiColors(ctx.ui.theme);
+
 		// Footer status
 		if (executionMode && todoItems.length > 0) {
 			const completed = todoItems.filter((t) => t.completed).length;
-			ctx.ui.setStatus("plan-mode", ctx.ui.theme.fg("accent", `plan:${completed}/${todoItems.length}`));
+			ctx.ui.setStatus("plan-mode", colors.primary(`plan:${completed}/${todoItems.length}`));
 		} else if (planModeEnabled) {
-			ctx.ui.setStatus("plan-mode", ctx.ui.theme.fg("warning", "● plan"));
+			ctx.ui.setStatus("plan-mode", colors.warning("● plan"));
 		} else {
 			ctx.ui.setStatus("plan-mode", undefined);
 		}
@@ -100,10 +103,10 @@ export default function planModeExtension(pi: ExtensionAPI): void {
 			const lines = todoItems.map((item) => {
 				if (item.completed) {
 					return (
-						ctx.ui.theme.fg("success", "☑ ") + ctx.ui.theme.fg("muted", ctx.ui.theme.strikethrough(item.text))
+						colors.success("☑ ") + colors.meta(ctx.ui.theme.strikethrough(item.text))
 					);
 				}
-				return `${ctx.ui.theme.fg("muted", "☐ ")}${item.text}`;
+				return `${colors.meta("☐ ")}${item.text}`;
 			});
 			ctx.ui.setWidget("plan-todos", lines);
 		} else {
@@ -277,7 +280,7 @@ Verify: command to run
 - **subagent** — dispatch scout (fast recon, haiku) and planner (design, opus) agents
 - **read, bash, grep, find, ls** — direct exploration (bash restricted to read-only commands)
 - **ast_grep** — structural code search (functions, classes, imports)
-- **exa_search, brave_search** — web research (docs, articles, examples)
+- **web_search, web_fetch** — preferred high-level web research and webpage retrieval for docs, articles, examples, and source gathering
 - **github_search_code** — find code on GitHub
 - **questionnaire** — ask user structured questions
 
