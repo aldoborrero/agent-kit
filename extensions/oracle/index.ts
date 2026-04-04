@@ -147,7 +147,16 @@ function filterSuggestion(raw: string | null): { suggestion: string | null; reas
   const wordCount = suggestion.split(/\s+/).length;
 
   if (wordCount < 2 && !suggestion.startsWith("/")) {
-    const allowed = new Set(["yes", "no", "ok", "okay", "continue", "commit", "push", "exit", "quit"]);
+    const allowed = new Set([
+      // affirmatives
+      "yes", "yeah", "yep", "yea", "yup", "sure",
+      // negation
+      "no",
+      // neutral
+      "ok", "okay",
+      // common one-word actions
+      "continue", "commit", "push", "deploy", "stop", "check", "exit", "quit",
+    ]);
     if (!allowed.has(lower)) return { suggestion: null, reason: "single-word suggestion not allowlisted" };
   }
 
@@ -472,6 +481,7 @@ async function generateSuggestion(
   ctx: ExtensionContext,
   currentModel: Model<any> | undefined,
   input: string,
+  onSession?: (session: { abort(): Promise<void>; dispose(): void }) => void,
 ): Promise<{
   suggestions: string[];
   rawSuggestion: string | null;
@@ -528,6 +538,8 @@ async function generateSuggestion(
     sessionManager: SessionManager.inMemory(),
     settingsManager,
   });
+
+  onSession?.(session);
 
   try {
     await session.prompt(input, { expandPromptTemplates: false, source: "interactive" });
@@ -589,6 +601,21 @@ export default function oracleExtension(pi: ExtensionAPI): void {
     generationId: 0,
   };
   let fancyFooterActive = false;
+
+  // Active generation session — aborted when a new generation starts or oracle is cleared.
+  let activeSession: { abort(): Promise<void>; dispose(): void } | null = null;
+
+  async function abortActiveSession(): Promise<void> {
+    if (!activeSession) return;
+    const session = activeSession;
+    activeSession = null;
+    try {
+      await session.abort();
+    } catch {
+      // ignore
+    }
+  }
+
   const fancyFooterReady = registerFancyFooterWidget(pi, () => ({
     id: "pi-agent-kit.oracle",
     label: "Oracle",
@@ -648,6 +675,7 @@ export default function oracleExtension(pi: ExtensionAPI): void {
   }
 
   function clearSuggestion(ctx?: ExtensionContext, options?: { preserveDiagnostics?: boolean }): void {
+    void abortActiveSession();
     if (ctx?.hasUI) lastUIContext = ctx;
     state.suggestions = [];
     state.selectedSuggestionIndex = 0;
@@ -726,22 +754,45 @@ export default function oracleExtension(pi: ExtensionAPI): void {
     renderSuggestion(ctx);
   });
 
+  pi.on("session_shutdown", async () => {
+    await abortActiveSession();
+  });
+
   pi.on("agent_start", async (_event, ctx) => {
     clearSuggestion(ctx);
   });
 
+  function shouldSuppressGeneration(ctx: ExtensionContext): string | null {
+    if (!state.enabled) return "disabled";
+    // Don't generate in plan mode (read-only exploration, no real next step to predict)
+    if ((ctx as any).planMode === true) return "plan_mode";
+    // Require at least one completed assistant turn in the conversation
+    return null;
+  }
+
   pi.on("agent_end", async (event, ctx) => {
-    if (!state.enabled) {
+    const suppressReason = shouldSuppressGeneration(ctx);
+    if (suppressReason) {
       clearSuggestion(ctx);
       return;
     }
 
-    const turnKey = buildTurnKey(event.messages as AgentMessage[]);
-    const input = buildSuggestionInput(event.messages as AgentMessage[], ctx.cwd);
+    const messages = event.messages as AgentMessage[];
+    const assistantTurnCount = messages.filter(isAssistantMessage).length;
+    if (assistantTurnCount < 1) {
+      clearSuggestion(ctx);
+      return;
+    }
+
+    const turnKey = buildTurnKey(messages);
+    const input = buildSuggestionInput(messages, ctx.cwd);
     if (!input) {
       clearSuggestion(ctx);
       return;
     }
+
+    // Abort any in-flight generation before starting a new one
+    await abortActiveSession();
 
     state.generating = true;
     if (fancyFooterActive) void refreshFancyFooter(pi);
@@ -765,7 +816,10 @@ export default function oracleExtension(pi: ExtensionAPI): void {
         ctx.ui.notify(`Oracle debug: generating with ${getConfiguredModelName(ctx.cwd)}` + (ctx.model ? ` (current ${ctx.model.provider}/${ctx.model.id})` : ""), "info");
         ctx.ui.notify(`Oracle payload:\n${truncate(input, 500)}`, "info");
       }
-      const result = await generateSuggestion(ctx, ctx.model, input);
+      const result = await generateSuggestion(ctx, ctx.model, input, (session) => {
+        activeSession = session;
+      });
+      activeSession = null;
       if (state.generationId !== generationId || !state.enabled) return;
 
       state.lastRawSuggestion = result.rawSuggestion;
@@ -801,7 +855,12 @@ export default function oracleExtension(pi: ExtensionAPI): void {
       syncEditor();
       renderSuggestion(ctx);
     } catch (error) {
+      activeSession = null;
       if (state.generationId !== generationId) return;
+      // Ignore abort errors — these are expected when a newer generation starts
+      if (error instanceof Error && (error.name === "AbortError" || error.message.includes("aborted"))) {
+        return;
+      }
       clearSuggestion(ctx, { preserveDiagnostics: true });
       state.lastError = error instanceof Error ? error.message : String(error);
       state.lastGenerationStatus = "error";
