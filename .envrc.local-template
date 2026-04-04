@@ -1,0 +1,39 @@
+# .envrc.local-template
+#
+# Copy this file to .envrc.local and fill in your values.
+# .envrc.local is sourced by direnv and never committed to git.
+#
+# Usage:
+#   cp .envrc.local-template .envrc.local
+#   direnv allow
+
+# ---------------------------------------------------------------------------
+# Voice (pick one STT provider, or set VOICE_DAEMON_URL for a local daemon)
+# ---------------------------------------------------------------------------
+
+# export GROQ_API_KEY=
+# export OPENAI_API_KEY=
+# export VOICE_DAEMON_URL=
+
+# Voice defaults (optional)
+# export VOICE_LANG=en          # transcription language (en, es, fr, de, ...)
+# export VOICE_MODE=paste        # paste | send
+
+# ---------------------------------------------------------------------------
+# Web search (enable one or both)
+# ---------------------------------------------------------------------------
+
+# export BRAVE_API_KEY=
+# export EXA_API_KEY=
+
+# ---------------------------------------------------------------------------
+# Oracle suggestion model (optional — defaults to current session model)
+# ---------------------------------------------------------------------------
+
+# export PI_ORACLE_MODEL=        # e.g. anthropic/claude-3-5-haiku-20241022
+
+# ---------------------------------------------------------------------------
+# Groq as a model provider (optional — separate from voice)
+# ---------------------------------------------------------------------------
+
+# export GROQ_API_KEY=           # already set above if using voice with Groq

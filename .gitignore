@@ -14,6 +14,7 @@ bun.lockb
 *.crt
 .env
 .env.*
+.envrc.local
 
 # personal dotfiles
 .bash_profile
@@ -31,3 +32,5 @@ bun.lockb
 # tools
 .claude/
 .mcp.json
+
+.scratch/
