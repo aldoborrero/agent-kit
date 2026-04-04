@@ -599,7 +599,7 @@ export default function oracleExtension(pi: ExtensionAPI): void {
       align: "right",
       fill: "none",
     },
-    textColor: state.generating ? "warning" : "accent",
+    textColor: "accent",
     visible: () => state.generating || state.suggestions.length > 0,
     renderText: () => state.generating ? "oracle:gen" : "oracle:ready",
   })).then((active) => {
@@ -638,6 +638,9 @@ export default function oracleExtension(pi: ExtensionAPI): void {
       editor.setOnSelectOracleSuggestion((index) => {
         state.selectedSuggestionIndex = index;
         if (lastUIContext) renderSuggestion(lastUIContext);
+      });
+      editor.setOnDismissOracleSuggestion(() => {
+        clearSuggestion(lastUIContext);
       });
       editorRef = editor;
       return editor;
@@ -741,6 +744,7 @@ export default function oracleExtension(pi: ExtensionAPI): void {
     }
 
     state.generating = true;
+    if (fancyFooterActive) void refreshFancyFooter(pi);
     state.lastError = null;
     state.lastRawSuggestion = null;
     state.lastFilterReason = null;

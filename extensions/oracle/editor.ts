@@ -11,6 +11,7 @@ export class OracleEditor extends CustomEditor {
   private oracleEnabled = true;
   private onAcceptOracleSuggestion?: () => void;
   private onSelectOracleSuggestion?: ((index: number) => void) | undefined;
+  private onDismissOracleSuggestion?: () => void;
 
   setOracleSuggestions(suggestions: string[], selectedIndex = 0): void {
     this.oracleSuggestions = suggestions.map((text) => text.trim()).filter(Boolean);
@@ -35,6 +36,10 @@ export class OracleEditor extends CustomEditor {
 
   setOnSelectOracleSuggestion(handler: ((index: number) => void) | undefined): void {
     this.onSelectOracleSuggestion = handler;
+  }
+
+  setOnDismissOracleSuggestion(handler: (() => void) | undefined): void {
+    this.onDismissOracleSuggestion = handler;
   }
 
   private getSelectedSuggestion(): string | null {
@@ -66,6 +71,7 @@ export class OracleEditor extends CustomEditor {
       // Dismiss suggestion — Up/Down then fall through to native message history
       if (matchesKey(data, "escape")) {
         this.clearOracleSuggestion();
+        this.onDismissOracleSuggestion?.();
         return;
       }
       // Cycle through multiple suggestions with Alt+Up / Alt+Down
@@ -82,6 +88,7 @@ export class OracleEditor extends CustomEditor {
       // Up/Down: dismiss oracle and fall through to native message history scroll
       if (matchesKey(data, "up") || matchesKey(data, "down")) {
         this.clearOracleSuggestion();
+        this.onDismissOracleSuggestion?.();
         // fall through — no return
       }
     }
