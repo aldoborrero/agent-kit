@@ -1,6 +1,6 @@
 # sandbox
 
-OS-level sandboxing for bash commands using `@anthropic-ai/sandbox-runtime`. Enforces filesystem and network restrictions at the OS level (sandbox-exec on macOS, bubblewrap on Linux).
+OS-level sandboxing for bash commands using a sandbox runtime library. Enforces filesystem and network restrictions at the OS level (sandbox-exec on macOS, bubblewrap on Linux).
 
 **Disabled by default.** Enable with `/sandbox on` or set `"enabled": true` in config.
 
@@ -43,7 +43,7 @@ Set `"enabled": true` in config to auto-enable on session start.
 
 ## Dependencies
 
-- `@anthropic-ai/sandbox-runtime` (npm, included in package.json)
+- sandbox runtime dependency (included in package.json)
 - Linux: `bubblewrap`, `socat`, `ripgrep`
 - macOS: uses built-in sandbox-exec
 

@@ -93,11 +93,19 @@ function errorResult(
 }
 
 export default function questionnaire(pi: ExtensionAPI) {
+  pi.on("before_agent_start", async (_event, ctx) => {
+    if (!ctx.hasUI) return;
+    return {
+      systemPrompt:
+        "When you need structured clarification from the user, especially multiple questions or explicit option selection, prefer the questionnaire tool over ad-hoc free-form questioning.",
+    };
+  });
+
   pi.registerTool({
     name: "questionnaire",
-    label: "Questionnaire",
+    label: "Ask Structured Questions",
     description:
-      "Ask the user one or more questions. Use for clarifying requirements, getting preferences, or confirming decisions. For single questions, shows a simple option list. For multiple questions, shows a tab-based interface.",
+      "Ask the user one or more structured questions with predefined options and optional free-text input. Prefer this tool over normal conversational questioning when you need multiple clarifications, explicit choices, preference gathering, or confirmation before proceeding. Best for scope, priority, implementation tradeoffs, rollout decisions, and other structured user input. For single questions, shows a simple option list. For multiple questions, shows a tab-based interface.",
     parameters: QuestionnaireParams,
 
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {

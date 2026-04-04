@@ -10,6 +10,7 @@
 
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext, ToolResultEvent } from "@mariozechner/pi-coding-agent";
 import { DynamicBorder } from "@mariozechner/pi-coding-agent";
+import { createUiColors } from "../_shared/ui-colors.js";
 import { Container, Key, Text, matchesKey, type Component, type TUI } from "@mariozechner/pi-tui";
 import os from "node:os";
 import path from "node:path";
@@ -233,11 +234,12 @@ function renderUsageBar(
 	while (sys + tools + con + rem < w) rem++;
 	while (sys + tools + con + rem > w && rem > 0) rem--;
 
+	const colors = createUiColors(theme);
 	const block = "█";
-	const sysStr = theme.fg("accent", block.repeat(sys));
-	const toolsStr = theme.fg("warning", block.repeat(tools));
-	const conStr = theme.fg("success", block.repeat(con));
-	const remStr = theme.fg("dim", block.repeat(rem));
+	const sysStr = colors.primary(block.repeat(sys));
+	const toolsStr = colors.warning(block.repeat(tools));
+	const conStr = colors.success(block.repeat(con));
+	const remStr = colors.subtle(block.repeat(rem));
 	return `${sysStr}${toolsStr}${conStr}${remStr}`;
 }
 
@@ -287,11 +289,12 @@ class ContextView implements Component {
 		this.data = data;
 		this.onDone = onDone;
 
+		const colors = createUiColors(theme);
 		this.container = new Container();
-		this.container.addChild(new DynamicBorder((s) => theme.fg("accent", s)));
+		this.container.addChild(new DynamicBorder((s) => colors.primary(s)));
 		this.container.addChild(
 			new Text(
-				theme.fg("accent", theme.bold("Context")) + theme.fg("dim", "  (Esc/q/Enter to close)"),
+				colors.primary(theme.bold("Context")) + colors.subtle("  (Esc/q/Enter to close)"),
 				1,
 				0,
 			),
@@ -302,13 +305,14 @@ class ContextView implements Component {
 		this.container.addChild(this.body);
 
 		this.container.addChild(new Text("", 1, 0));
-		this.container.addChild(new DynamicBorder((s) => theme.fg("accent", s)));
+		this.container.addChild(new DynamicBorder((s) => colors.primary(s)));
 	}
 
 	private rebuild(width: number): void {
-		const muted = (s: string) => this.theme.fg("muted", s);
-		const dim = (s: string) => this.theme.fg("dim", s);
-		const text = (s: string) => this.theme.fg("text", s);
+		const colors = createUiColors(this.theme);
+		const muted = (s: string) => colors.meta(s);
+		const dim = (s: string) => colors.subtle(s);
+		const text = (s: string) => colors.text(s);
 
 		const lines: string[] = [];
 
@@ -343,16 +347,16 @@ class ContextView implements Component {
 				) +
 				" " +
 				dim("sys") +
-				this.theme.fg("accent", "█") +
+				colors.primary("█") +
 				" " +
 				dim("tools") +
-				this.theme.fg("warning", "█") +
+				colors.warning("█") +
 				" " +
 				dim("convo") +
-				this.theme.fg("success", "█") +
+				colors.success("█") +
 				" " +
 				dim("free") +
-				this.theme.fg("dim", "█");
+				colors.subtle("█");
 			lines.push(bar);
 		}
 
@@ -381,8 +385,8 @@ class ContextView implements Component {
 		const skillsRendered = this.data.skills.length
 			? joinCommaStyled(
 					this.data.skills,
-					(name) => (loaded.has(name) ? this.theme.fg("success", name) : this.theme.fg("muted", name)),
-					this.theme.fg("muted", ", "),
+					(name) => (loaded.has(name) ? colors.success(name) : colors.meta(name)),
+					colors.meta(", "),
 				)
 			: "(none)";
 		lines.push(muted(`Skills (${this.data.skills.length}): `) + skillsRendered);

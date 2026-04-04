@@ -13,6 +13,7 @@ import {
   type ExtensionAPI,
   getMarkdownTheme,
 } from "@mariozechner/pi-coding-agent";
+import { createUiColors } from "../_shared/ui-colors.js";
 import { Container, Markdown, Text } from "@mariozechner/pi-tui";
 import { Type } from "@sinclair/typebox";
 import * as fs from "node:fs";
@@ -707,27 +708,28 @@ export default function (pi: ExtensionAPI) {
 
     renderCall(args, theme) {
       const p = args as AstGrepParams;
-      let text = theme.fg("toolTitle", theme.bold("ast-grep "));
+      const colors = createUiColors(theme);
+      let text = colors.model(theme.bold("ast-grep "));
 
       if (p.mode === "pattern") {
-        text += theme.fg("accent", "pattern") +
+        text += colors.primary("pattern") +
           " " +
-          theme.fg("muted", p.pattern ?? "");
+          colors.meta(p.pattern ?? "");
       } else if (p.mode === "rule") {
         const preview = p.rule && p.rule.length > 60
           ? p.rule.slice(0, 60) + "…"
           : (p.rule ?? "");
-        text += theme.fg("accent", "rule") +
+        text += colors.primary("rule") +
           " " +
-          theme.fg("muted", preview.replace(/\n/g, " "));
+          colors.meta(preview.replace(/\n/g, " "));
       } else if (p.mode === "inspect") {
-        text += theme.fg("accent", `inspect:${p.inspect_format ?? "ast"}`) +
+        text += colors.primary(`inspect:${p.inspect_format ?? "ast"}`) +
           " " +
-          theme.fg("muted", p.pattern ?? "");
+          colors.meta(p.pattern ?? "");
       }
 
       if (p.lang) {
-        text += " " + theme.fg("dim", `[${p.lang}]`);
+        text += " " + colors.subtle(`[${p.lang}]`);
       }
 
       return new Text(text, 0, 0);
@@ -747,8 +749,9 @@ export default function (pi: ExtensionAPI) {
         const remaining = lines.length - COLLAPSED_LINES;
         let collapsed = preview;
         if (remaining > 0) {
+          const colors = createUiColors(theme);
           collapsed += "\n" +
-            theme.fg("dim", `… ${remaining} more lines (Ctrl+O to expand)`);
+            colors.subtle(`… ${remaining} more lines (Ctrl+O to expand)`);
         }
         return new Text(collapsed, 0, 0);
       }
