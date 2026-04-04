@@ -52,10 +52,12 @@ export default function cronLoopExtension(pi: ExtensionAPI) {
 		if (reloadTimer) {
 			clearTimeout(reloadTimer);
 		}
+		// 300ms matches openclaude's FILE_STABILITY_MS — gives atomic writes
+		// (temp file + rename) time to settle before we read the final content.
 		reloadTimer = setTimeout(() => {
 			reloadTimer = null;
 			void reloadFromDisk();
-		}, 150);
+		}, 300);
 	}
 
 	async function reloadFromDisk(): Promise<void> {

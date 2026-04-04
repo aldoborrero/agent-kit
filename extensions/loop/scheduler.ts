@@ -20,6 +20,16 @@ export class LoopScheduler {
 	private isOwner = false;
 	private readonly sessionId = `${process.pid}-${Math.random().toString(36).slice(2, 10)}`;
 
+	// Fix 1: inFlight guard — prevents double-fire while the async
+	// persistTasks() write + file-watcher reload cycle is in progress.
+	private readonly inFlight = new Set<string>();
+
+	// Fix 2: nextFireAt separated from the task store.
+	// store.replaceAll() recreates task objects from disk (potentially stale),
+	// but this Map survives intact, so first-sight anchoring from disk is
+	// never clobbered by a file-watcher-triggered reload.
+	private readonly nextFireAt = new Map<string, number>();
+
 	constructor(
 		private readonly pi: ExtensionAPI,
 		private readonly store: TaskStore,
@@ -81,6 +91,8 @@ export class LoopScheduler {
 
 	clearAll(): number {
 		this.stop();
+		this.nextFireAt.clear();
+		this.inFlight.clear();
 		const count = this.store.clear();
 		this.callbacks.onStatusChange?.();
 		return count;
@@ -88,6 +100,10 @@ export class LoopScheduler {
 
 	deleteTask(id: string): boolean {
 		const deleted = this.store.delete(id);
+		if (deleted) {
+			this.nextFireAt.delete(id);
+			this.inFlight.delete(id);
+		}
 		if (deleted && this.store.size() === 0) {
 			this.stop();
 		}
@@ -102,8 +118,12 @@ export class LoopScheduler {
 
 		const now = Date.now();
 		for (const task of this.store.list()) {
-			const isDue = now >= task.nextFireAt;
-			if (!isDue) continue;
+			// Fix 1: skip tasks already being persisted/cleaned up
+			if (this.inFlight.has(task.id)) continue;
+
+			// Fix 2: use in-memory nextFireAt if available, fall back to task object
+			const nextFire = this.nextFireAt.get(task.id) ?? task.nextFireAt;
+			if (now < nextFire) continue;
 
 			task.fireCount++;
 			task.lastFiredAt = now;
@@ -112,12 +132,20 @@ export class LoopScheduler {
 			this.sendScheduledMessage(task);
 
 			if (!task.recurring || isExpired) {
+				this.nextFireAt.delete(task.id);
+				this.inFlight.add(task.id);
 				this.store.delete(task.id);
 				if (isExpired) {
 					this.callbacks.onTaskExpired?.(task);
 				}
 			} else {
-				task.nextFireAt = computeTaskNextFireAt(task, now, task.jitterMs, task.cron) ?? now + 60_000;
+				// Update in-memory nextFireAt first — survives any store.replaceAll()
+				const newNext = computeTaskNextFireAt(task, now, task.jitterMs, task.cron) ?? now + 60_000;
+				task.nextFireAt = newNext;
+				this.nextFireAt.set(task.id, newNext);
+				// Guard against double-fire during async write + file-watcher reload
+				this.inFlight.add(task.id);
+				setTimeout(() => this.inFlight.delete(task.id), 2000);
 			}
 
 			if (this.store.size() === 0) {
