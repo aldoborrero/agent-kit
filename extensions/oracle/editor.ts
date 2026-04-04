@@ -56,19 +56,33 @@ export class OracleEditor extends CustomEditor {
 
   override handleInput(data: string): void {
     if (this.shouldShowOracleGhost()) {
+      // Accept suggestion
       if (matchesKey(data, "tab") || matchesKey(data, "right")) {
         this.insertTextAtCursor(this.getSelectedSuggestion()!);
         this.clearOracleSuggestion();
         this.onAcceptOracleSuggestion?.();
         return;
       }
-      if (matchesKey(data, "up")) {
-        this.cycleSelection(-1);
+      // Dismiss suggestion — Up/Down then fall through to native message history
+      if (matchesKey(data, "escape")) {
+        this.clearOracleSuggestion();
         return;
       }
-      if (matchesKey(data, "down")) {
-        this.cycleSelection(1);
-        return;
+      // Cycle through multiple suggestions with Alt+Up / Alt+Down
+      if (this.oracleSuggestions.length > 1) {
+        if (matchesKey(data, "alt+up")) {
+          this.cycleSelection(-1);
+          return;
+        }
+        if (matchesKey(data, "alt+down")) {
+          this.cycleSelection(1);
+          return;
+        }
+      }
+      // Up/Down: dismiss oracle and fall through to native message history scroll
+      if (matchesKey(data, "up") || matchesKey(data, "down")) {
+        this.clearOracleSuggestion();
+        // fall through — no return
       }
     }
 

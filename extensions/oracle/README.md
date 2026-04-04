@@ -5,15 +5,18 @@ Generates a short “likely next user prompt” after each completed agent run a
 ## Features
 
 - Generates up to 3 brief next-step suggestions after `agent_end`
+- Freely returns fewer than 3 when extra candidates would be too similar
 - Shows the selected suggestion as ghost text in the editor
 - Shows the next available suggestion in a widget with a counter:
   - `oracle next[2/3]: check the logs`
-- Lets you navigate suggestions with:
-  - `Up Arrow`
-  - `Down Arrow`
+- Lets you cycle through multiple suggestions with:
+  - `Alt+Up`
+  - `Alt+Down`
 - Lets you insert the selected suggestion into the editor with:
   - `Tab`
   - `Right Arrow`
+- Lets you dismiss the suggestion (restoring native Up/Down history scroll) with:
+  - `Escape`
 - Toggle or inspect status with:
   - `/oracle`
   - `/oracle on`
@@ -44,7 +47,7 @@ Example:
 
 ```json
 {
-  "model": "anthropic/claude-sonnet-4-5"
+  "model": "provider/model-id"
 }
 ```
 
@@ -52,7 +55,7 @@ Also accepted:
 
 ```json
 {
-  "defaultModel": "anthropic/claude-sonnet-4-5"
+  "defaultModel": "provider/model-id"
 }
 ```
 
@@ -67,7 +70,7 @@ PI_ORACLE_MODEL=provider/model-id
 Example:
 
 ```bash
-PI_ORACLE_MODEL=anthropic/claude-sonnet-4-5
+PI_ORACLE_MODEL=provider/model-id
 ```
 
 Default:
@@ -92,7 +95,10 @@ This is a v1 implementation:
 - the next suggestion is shown in the oracle widget above the editor with a counter
 - the widget also tells you which suggestion is currently in the editor
 - the model returns a JSON array of candidate suggestions
-- `Up Arrow` / `Down Arrow` cycles between available suggestions
+- it may return 1, 2, or 3 suggestions depending on how distinct the options are
+- `Alt+Up` / `Alt+Down` cycles between available suggestions when there are multiple
+- `Up Arrow` / `Down Arrow` always scroll native message history (unblocked)
+- `Escape` dismisses the current suggestion
 - accepting the selected suggestion inserts it into the editor with `Tab` or `Right Arrow`
 - it does **not** auto-send the suggestion
 
