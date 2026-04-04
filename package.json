@@ -18,9 +18,10 @@
   },
   "dependencies": {
     "codex-plugin-cc": "github:openai/codex-plugin-cc",
+    "pi-fancy-footer": "^0.5.0",
+    "pi-interactive-shell": "github:nicobailon/pi-interactive-shell",
     "pi-lsp-extension": "github:samfoy/pi-lsp-extension",
-    "pi-mcp-adapter": "github:nicobailon/pi-mcp-adapter",
-    "pi-interactive-shell": "github:nicobailon/pi-interactive-shell"
+    "pi-mcp-adapter": "github:nicobailon/pi-mcp-adapter"
   },
   "peerDependencies": {
     "@mariozechner/pi-ai": "*",
@@ -80,7 +81,8 @@
       "extensions/web-tools",
       "node_modules/pi-lsp-extension",
       "node_modules/pi-mcp-adapter",
-      "node_modules/pi-interactive-shell"
+      "node_modules/pi-interactive-shell",
+      "node_modules/pi-fancy-footer"
     ]
   }
 }

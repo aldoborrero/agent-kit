@@ -6,6 +6,7 @@
       "name": "@aldoborrero/pi-agent-kit",
       "dependencies": {
         "codex-plugin-cc": "github:openai/codex-plugin-cc",
+        "pi-fancy-footer": "^0.5.0",
         "pi-interactive-shell": "github:nicobailon/pi-interactive-shell",
         "pi-lsp-extension": "github:samfoy/pi-lsp-extension",
         "pi-mcp-adapter": "github:nicobailon/pi-mcp-adapter",
@@ -555,6 +556,8 @@
     "path-to-regexp": ["path-to-regexp@8.4.2", "", {}, "sha512-qRcuIdP69NPm4qbACK+aDogI5CBDMi1jKe0ry5rSQJz8JVLsC7jV8XpiJjGRLLol3N+R5ihGYcrPLTno6pAdBA=="],
 
     "pend": ["pend@1.2.0", "", {}, "sha512-F3asv42UuXchdzt+xXqfW1OGlVBe+mxa2mqI0pg5yAHZPvFmY3Y6drSf/GQ1A86WgWEN9Kzh/WrgKa6iGcHXLg=="],
+
+    "pi-fancy-footer": ["pi-fancy-footer@0.5.0", "", {}, "sha512-NisICOvHdlNTwvqIJd7vbYnXUWwhMKkqUG5Z2bt0UvbuW/0Fm4SBo+JNgnPT9dsZT2Ek7ug4/XtLKVYUlkTi/Q=="],
 
     "pi-interactive-shell": ["pi-interactive-shell@github:nicobailon/pi-interactive-shell#b29eb8e", { "dependencies": { "@sinclair/typebox": "^0.34.40", "@xterm/addon-serialize": "^0.13.0", "@xterm/headless": "^5.5.0", "node-pty": "^1.1.0" }, "bin": { "pi-interactive-shell": "./scripts/install.js" } }, "nicobailon-pi-interactive-shell-b29eb8e"],
 
