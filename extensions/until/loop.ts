@@ -10,6 +10,7 @@ import { Type } from "@sinclair/typebox";
 import { complete, type Api, type Model, type UserMessage } from "@mariozechner/pi-ai";
 import type { ExtensionAPI, ExtensionContext, SessionSwitchEvent } from "@mariozechner/pi-coding-agent";
 import { compact } from "@mariozechner/pi-coding-agent";
+import { createUiColors } from "../_shared/ui-colors.js";
 import { Container, type SelectItem, SelectList, Text } from "@mariozechner/pi-tui";
 import { DynamicBorder } from "@mariozechner/pi-coding-agent";
 
@@ -159,7 +160,8 @@ function updateStatus(ctx: ExtensionContext, state: LoopStateData): void {
 	const text = summary
 		? `Loop active: ${summary} ${turnText}`
 		: `Loop active ${turnText}`;
-	ctx.ui.setWidget("loop", [ctx.ui.theme.fg("accent", text)]);
+	const colors = createUiColors(ctx.ui.theme);
+	ctx.ui.setWidget("loop", [colors.primary(text)]);
 }
 
 async function loadState(ctx: ExtensionContext): Promise<LoopStateData> {
@@ -212,6 +214,7 @@ export default function loopExtension(pi: ExtensionAPI): void {
 		if (!loopState.active || !loopState.mode || !loopState.prompt) return;
 		if (ctx.hasPendingMessages()) return;
 
+		const prompt = loopState.prompt;
 		const loopCount = (loopState.loopCount ?? 0) + 1;
 		loopState = { ...loopState, loopCount };
 		persistState(loopState);
@@ -219,7 +222,7 @@ export default function loopExtension(pi: ExtensionAPI): void {
 
 		pi.sendMessage({
 			customType: "loop",
-			content: loopState.prompt,
+			content: prompt,
 			display: true
 		}, {
 			deliverAs: "followUp",
@@ -235,24 +238,25 @@ export default function loopExtension(pi: ExtensionAPI): void {
 		}));
 
 		const selection = await ctx.ui.custom<string | null>((tui, theme, _kb, done) => {
+			const colors = createUiColors(theme);
 			const container = new Container();
-			container.addChild(new DynamicBorder((str) => theme.fg("accent", str)));
-			container.addChild(new Text(theme.fg("accent", theme.bold("Select a loop preset"))));
+			container.addChild(new DynamicBorder((str) => colors.primary(str)));
+			container.addChild(new Text(colors.primary(theme.bold("Select a loop preset"))));
 
 			const selectList = new SelectList(items, Math.min(items.length, 10), {
-				selectedPrefix: (text) => theme.fg("accent", text),
-				selectedText: (text) => theme.fg("accent", text),
-				description: (text) => theme.fg("muted", text),
-				scrollInfo: (text) => theme.fg("dim", text),
-				noMatch: (text) => theme.fg("warning", text),
+				selectedPrefix: (text) => colors.primary(text),
+				selectedText: (text) => colors.primary(text),
+				description: (text) => colors.meta(text),
+				scrollInfo: (text) => colors.subtle(text),
+				noMatch: (text) => colors.warning(text),
 			});
 
 			selectList.onSelect = (item) => done(item.value);
 			selectList.onCancel = () => done(null);
 
 			container.addChild(selectList);
-			container.addChild(new Text(theme.fg("dim", "Press enter to confirm or esc to cancel")));
-			container.addChild(new DynamicBorder((str) => theme.fg("accent", str)));
+			container.addChild(new Text(colors.subtle("Press enter to confirm or esc to cancel")));
+			container.addChild(new DynamicBorder((str) => colors.primary(str)));
 
 			return {
 				render(width: number) {
@@ -339,6 +343,20 @@ export default function loopExtension(pi: ExtensionAPI): void {
 
 	pi.registerCommand("until", {
 		description: "Repeat until a condition is met (e.g., /until tests, /until custom <condition>)",
+		getArgumentCompletions: (prefix: string) => {
+			const trimmed = prefix.trimStart();
+			const modes = ["tests", "custom", "self"];
+			if (!trimmed) {
+				return modes.map((value) => ({ value, label: value }));
+			}
+			const parts = trimmed.split(/\s+/).filter(Boolean);
+			const sub = parts[0]?.toLowerCase() ?? "";
+			if (parts.length <= 1 && !/\s$/.test(trimmed)) {
+				const filtered = modes.filter((value) => value.startsWith(sub));
+				return filtered.length > 0 ? filtered.map((value) => ({ value, label: value })) : null;
+			}
+			return null;
+		},
 		handler: async (args, ctx) => {
 			let nextState = parseArgs(args);
 			if (!nextState) {
