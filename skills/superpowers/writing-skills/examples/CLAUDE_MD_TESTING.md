@@ -85,7 +85,7 @@ Browse: `ls ~/.claude/skills/`
 Search: `grep -r "keyword" ~/.claude/skills/`
 ```
 
-### Variant C: Claude.AI Emphatic Style
+### Variant C: Emphatic Agent Style
 ```xml
 <available_skills>
 Your personal library of proven techniques, patterns, and tools
@@ -98,7 +98,7 @@ Instructions: `skills/using-skills`
 </available_skills>
 
 <important_info_about_skills>
-Claude might think it knows how to approach tasks, but the skills
+An agent might think it knows how to approach tasks, but the skills
 library contains battle-tested approaches that prevent common mistakes.
 
 THIS IS EXTREMELY IMPORTANT. BEFORE ANY TASK, CHECK FOR SKILLS!
