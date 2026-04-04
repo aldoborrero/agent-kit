@@ -7,7 +7,7 @@ import { createUiColors } from "../_shared/ui-colors.js";
 import { registerLoopCommand } from "./loop-command";
 import { getLoopTasksFilePath, loadStoredTasks, saveStoredTasks } from "./persistence";
 import { LoopScheduler } from "./scheduler";
-import { findMissedTasks, InMemoryTaskStore, RECURRING_EXPIRY_DAYS } from "./task-store";
+import { findMissedTasks, hydrateRuntimeTask, InMemoryTaskStore, RECURRING_EXPIRY_DAYS } from "./task-store";
 
 /**
  * Loop Extension — periodic polling and monitoring during a session.
@@ -60,6 +60,31 @@ export default function cronLoopExtension(pi: ExtensionAPI) {
 
 	async function reloadFromDisk(): Promise<void> {
 		const storedTasks = await loadStoredTasks();
+
+		if (scheduler.isSchedulerOwner()) {
+			// Owner: in-memory state is authoritative for existing tasks.
+			// Only apply additions and deletions made by other sessions.
+			// Never overwrite in-memory task state — that would cause double-fires
+			// when the file watcher triggers from our own writes.
+			const diskIds = new Set(storedTasks.map((t) => t.id));
+
+			// Remove tasks deleted by another session
+			for (const task of store.list()) {
+				if (!diskIds.has(task.id)) {
+					store.delete(task.id);
+				}
+			}
+			// Add tasks created by another session
+			for (const task of storedTasks) {
+				if (!store.get(task.id)) {
+					store.add(hydrateRuntimeTask(task));
+				}
+			}
+			updateStatus();
+			return;
+		}
+
+		// Passive session: full reload from disk
 		store.replaceAll(storedTasks);
 		updateStatus();
 	}
