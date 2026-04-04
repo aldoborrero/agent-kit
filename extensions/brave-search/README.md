@@ -2,6 +2,9 @@
 
 Privacy-focused web search via [Brave Search API](https://brave.com/search/api/). Free tier available.
 
+> [!NOTE]
+> This is now considered a backend-specific search tool. Prefer `web_search` from `web-tools` for general agent-facing web search unless you explicitly need Brave-specific behavior.
+
 ## Tool
 
 | Tool | Description |

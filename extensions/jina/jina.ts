@@ -5,7 +5,7 @@ export default function (pi: ExtensionAPI) {
   pi.registerTool({
     name: "jina",
     description:
-      "Fetch a webpage and return its content as markdown. Use this to read web pages, documentation, articles, etc.",
+      "Fetch a webpage and return its content as markdown. Backend-specific fetch tool: prefer web_fetch unless you explicitly want raw Jina Reader output.",
     parameters: Type.Object({
       url: Type.String({ description: "The URL to fetch" }),
     }),

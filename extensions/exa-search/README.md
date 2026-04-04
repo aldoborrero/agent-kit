@@ -2,6 +2,9 @@
 
 AI-powered web search via [Exa](https://exa.ai). Supports neural (semantic), fast (keyword), and deep (comprehensive) search modes with domain and date filtering.
 
+> [!NOTE]
+> This is now considered a backend-specific search tool. Prefer `web_search` from `web-tools` for general agent-facing web search unless you explicitly need Exa-specific behavior.
+
 ## Tool
 
 | Tool | Description |

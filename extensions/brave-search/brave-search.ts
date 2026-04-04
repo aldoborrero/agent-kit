@@ -53,10 +53,12 @@ export default function (pi: ExtensionAPI) {
 		name: "brave_search",
 		description:
 			"Search the web using Brave Search. Returns structured results with titles, URLs, and snippets. " +
-			"Good for recent news, forum discussions, general web queries, and privacy-focused search. Free tier available.",
-		promptSnippet: "Privacy-focused web search via Brave. Good for news, forums, and general queries.",
+			"Good for recent news, forum discussions, general web queries, and privacy-focused search. " +
+			"Backend-specific search tool: prefer web_search unless you explicitly need Brave-specific behavior. Free tier available.",
+		promptSnippet: "Backend-specific Brave search. Prefer web_search unless you need Brave-specific behavior.",
 		promptGuidelines: [
-			"Use brave_search for general web queries, recent news, forum discussions, and when privacy matters",
+			"Prefer web_search for general agent-facing web research and source gathering.",
+			"Use brave_search only when you explicitly want Brave-specific search behavior, recency filtering, or privacy-focused search.",
 			"Use recency filter to find recent content: 'day' for breaking news, 'week' for recent discussions",
 			"Max 20 results per query",
 		],

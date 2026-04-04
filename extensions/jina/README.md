@@ -2,6 +2,9 @@
 
 Fetch webpages and return their content as clean markdown using [Jina AI's Reader API](https://jina.ai/reader/).
 
+> [!NOTE]
+> This is now considered a backend-specific fetch tool. Prefer `web_fetch` from `web-tools` for general agent-facing webpage retrieval unless you explicitly want raw Jina Reader output.
+
 ## Tool
 
 **`jina`** -- Fetch a webpage and return its content as markdown.

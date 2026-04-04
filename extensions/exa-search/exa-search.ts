@@ -37,10 +37,11 @@ export default function (pi: ExtensionAPI) {
 		description:
 			"Search the web using Exa's AI-powered search engine. Returns structured results with titles, URLs, and snippets. " +
 			"Supports neural search (semantic understanding), fast search (keyword-based), and deep search (comprehensive). " +
-			"Use for finding documentation, code examples, API references, articles, and research.",
-		promptSnippet: "AI-powered web search via Exa. Use for documentation, code examples, articles, and research.",
+			"Backend-specific search tool: prefer web_search unless you explicitly need Exa-specific behavior.",
+		promptSnippet: "Backend-specific Exa search. Prefer web_search unless you need Exa-specific behavior.",
 		promptGuidelines: [
-			"Use exa_search for web research: documentation, articles, code examples, API references",
+			"Prefer web_search for general agent-facing web research and source gathering.",
+			"Use exa_search only when you explicitly want Exa-specific search behavior or tuning.",
 			"Use 'neural' type for semantic queries ('how to implement X'), 'fast' for keyword queries ('lodash debounce npm')",
 			"Use include_domains to restrict search to specific sites (e.g. ['docs.python.org', 'developer.mozilla.org'])",
 		],
