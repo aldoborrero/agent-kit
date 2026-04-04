@@ -36,6 +36,7 @@ import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { getAgentDir } from "@mariozechner/pi-coding-agent";
+import { createUiColors } from "../_shared/ui-colors.js";
 import * as tg from "./telegram.js";
 import { MessageQueue } from "./queue.js";
 import { createProvider, detectProvider } from "../voice/providers.js";
@@ -443,21 +444,22 @@ export default function walkieExtension(pi: ExtensionAPI) {
 
   function updateStatus(ctx: ExtensionContext): void {
     if (!ctx.hasUI) return;
-    const { theme, setStatus } = ctx.ui;
+    const { setStatus } = ctx.ui;
+    const colors = createUiColors(ctx.ui.theme);
 
     if (!config.enabled) {
-      setStatus("walkie", theme.fg("warning", "walkie:off"));
+      setStatus("walkie", colors.warning("walkie:off"));
       return;
     }
     if (setupMode) {
-      setStatus("walkie", theme.fg("warning", "walkie:setup"));
+      setStatus("walkie", colors.warning("walkie:setup"));
       return;
     }
     if (!isConfigured(config)) {
-      setStatus("walkie", theme.fg("error", "walkie:unconfigured"));
+      setStatus("walkie", colors.danger("walkie:unconfigured"));
       return;
     }
-    setStatus("walkie", theme.fg("success", "walkie:on"));
+    setStatus("walkie", colors.success("walkie:on"));
   }
 
   /**
@@ -1215,7 +1217,7 @@ export default function walkieExtension(pi: ExtensionAPI) {
           if (config.topicId) {
             const nameHint = config.topicName
               ? `Current: ${config.topicName} — leave blank to keep`
-              : "Short project name shown in notifications (e.g. agent-kit)";
+              : "Short project name shown in notifications (e.g. pi-agent-kit)";
             const nameInput = await ctx.ui.input("Project name (optional)", nameHint);
             if (nameInput !== null && nameInput.trim()) {
               config.topicName = nameInput.trim();

@@ -1,15 +1,15 @@
-# Agent Kit
+# Pi Agent Kit
 
-A collection of skills and extensions for AI coding agents, compatible with [pi-coding-agent](https://github.com/badlogic/pi-mono) and [Claude Code](https://claude.com/claude-code).
+A collection of skills and extensions for AI coding agents, compatible with [pi-coding-agent](https://github.com/badlogic/pi-mono) and related agent runtimes.
 
 ## Installation
 
 ```bash
 # Install from git
-pi install git:github.com/aldoborrero/agent-kit
+pi install git:github.com/aldoborrero/pi-agent-kit
 
 # Or from local clone
-pi install ./agent-kit
+pi install ./pi-agent-kit
 
 # Test a single extension
 pi -e ./extensions/notify/notify.ts
@@ -18,11 +18,11 @@ pi -e ./extensions/notify/notify.ts
 ## Repository Structure
 
 ```
-agent-kit/
+pi-agent-kit/
 ├── agents/           # Agent definitions (6 agents)
 ├── extensions/       # TypeScript extensions (33 local + 3 npm)
 ├── prompts/          # Workflow templates (4 prompts)
-├── skills/           # Markdown skills (Claude Code + pi-coding-agent)
+├── skills/           # Markdown skills (portable across agent runtimes)
 │   ├── ast-grep/     # AST-based structural code search
 │   ├── kagi-search/  # Privacy-focused search
 │   ├── pexpect-cli/  # Interactive CLI automation
@@ -77,10 +77,11 @@ TypeScript extensions for [pi-coding-agent](https://github.com/badlogic/pi-mono)
 
 | Extension | Description |
 |-----------|-------------|
-| [`exa-search`](extensions/exa-search/README.md) | AI-powered web search via Exa — neural, fast, deep modes with domain filtering |
-| [`brave-search`](extensions/brave-search/README.md) | Privacy-focused web search via Brave — recency filtering, free tier |
+| `web-tools` | High-level `web_search` and `web_fetch` tools — preferred interface for web search, webpage fetching, and source gathering |
 | [`github-search`](extensions/github-search/README.md) | Search code, issues, and PRs on GitHub via `gh` CLI |
-| [`jina`](extensions/jina/README.md) | Fetch webpages and return clean markdown via Jina AI's Reader API |
+| [`exa-search`](extensions/exa-search/README.md) | Backend-specific Exa search integration used by higher-level web tooling |
+| [`brave-search`](extensions/brave-search/README.md) | Backend-specific Brave search integration used by higher-level web tooling |
+| [`jina`](extensions/jina/README.md) | Backend-specific webpage-to-markdown fetcher used by higher-level web tooling |
 
 ### Model Providers
 
@@ -118,7 +119,7 @@ TypeScript extensions for [pi-coding-agent](https://github.com/badlogic/pi-mono)
 
 ## Skills
 
-Markdown-based instructions that teach AI agents how to use external tools. Compatible with both Claude Code and pi-coding-agent via the [Agent Skills](https://agentskills.io) standard.
+Markdown-based instructions that teach AI agents how to use external tools. Compatible with pi-coding-agent and other runtimes via the [Agent Skills](https://agentskills.io) standard.
 
 ### Tool Skills
 

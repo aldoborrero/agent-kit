@@ -1,5 +1,5 @@
 {
-  "name": "@aldoborrero/agent-kit",
+  "name": "@aldoborrero/pi-agent-kit",
   "version": "1.0.0",
   "description": "Reusable skills and extensions for Pi coding agent",
   "type": "module",
@@ -14,7 +14,7 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/aldoborrero/agent-kit.git"
+    "url": "https://github.com/aldoborrero/pi-agent-kit.git"
   },
   "dependencies": {
     "codex-plugin-cc": "github:openai/codex-plugin-cc",
@@ -76,6 +76,8 @@
       "extensions/codex",
       "extensions/context",
       "extensions/walkie",
+      "extensions/oracle",
+      "extensions/web-tools",
       "node_modules/pi-lsp-extension",
       "node_modules/pi-mcp-adapter",
       "node_modules/pi-interactive-shell"

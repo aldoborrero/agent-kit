@@ -1,13 +1,13 @@
-# Agent Guidelines for agent-kit
+# Agent Guidelines for pi-agent-kit
 
 ## Project Overview
 
-agent-kit is a toolkit for AI coding agents providing skills, extensions, themes, and specialized agents for pi-coding-agent and Claude Code.
+pi-agent-kit is a toolkit for AI coding agents providing skills, extensions, themes, and specialized agents for pi-coding-agent and related agent runtimes.
 
 ## Directory Structure
 
 ```
-agent-kit/
+pi-agent-kit/
 ├── agents/           # Agent definitions (scout, planner, worker, reviewer, debugger, brainstormer)
 ├── extensions/       # TypeScript extensions (32 local + 3 external npm packages)
 ├── prompts/          # Workflow templates (brainstorm, debug, full-cycle, review)
@@ -45,8 +45,8 @@ agent-kit/
 | Tool | Extension | Description |
 |------|-----------|-------------|
 | `ast_grep` | ast-grep | Structural code search via AST patterns |
-| `exa_search` | exa-search | AI-powered web search |
-| `brave_search` | brave-search | Privacy-focused web search |
+| `web_search` | web-tools | Preferred high-level web search with structured results and source URLs |
+| `web_fetch` | web-tools | Preferred high-level webpage fetcher with markdown output and optional extraction |
 | `github_search_code` | github-search | Search code on GitHub |
 | `github_search_issues` | github-search | Search GitHub issues |
 | `github_search_prs` | github-search | Search GitHub PRs |
@@ -92,12 +92,13 @@ agent-kit/
 - Each skill has a `SKILL.md` file with frontmatter (name, description)
 - Frontmatter `name` MUST match the parent directory name (pi validates this)
 - Skills under `superpowers/` get `/superpowers:*` namespace commands via skill-namespaces extension
-- Compatible with both Claude Code and pi-coding-agent
+- Compatible with pi-coding-agent and related agent runtimes
 
 ### Pi Extensions (`extensions/`)
 - TypeScript files that register tools with pi-coding-agent
 - Use event hooks (`session_start`, `tool_result`, etc.) for side effects
 - Prefer simple solutions over tool replacement
+- Prefer high-level web tools (`web_search`, `web_fetch`) over backend-specific tools (`exa_search`, `brave_search`, `jina`) in agent-facing guidance
 - Each extension has its own directory with a README.md
 - Extensions with npm dependencies have their own `package.json`
 - If an extension has multiple `.ts` files, add a `package.json` with `pi.extensions` pointing to the entry file
@@ -127,7 +128,7 @@ pi -e ./extensions/example/example.ts
 
 ### Installing to pi-coding-agent
 ```bash
-pi install git:github.com/aldoborrero/agent-kit
+pi install git:github.com/aldoborrero/pi-agent-kit
 ```
 
 ## Writing New Components
