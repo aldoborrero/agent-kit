@@ -454,7 +454,14 @@ async function resolveSuggestionModel(
       return { model: undefined, reason: `configured model ${configured} found, but no API key available for provider ${explicit.provider}` };
     }
     if (configured !== DEFAULT_SUGGESTION_MODEL) {
+      // Model configured explicitly but not found — warn via context if possible
       const currentLabel = currentModel ? `${currentModel.provider}/${currentModel.id}` : "none";
+      if (ctx.hasUI) {
+        ctx.ui.notify(
+          `Oracle: configured model "${configured}" not found in registry (provider extension loaded? correct model id?). Falling back to ${currentLabel}.`,
+          "warning",
+        );
+      }
       return {
         model: currentModel,
         reason: `configured model ${configured} was not found in Oracle's internal model registry; falling back to current model ${currentLabel}`,
