@@ -298,7 +298,7 @@ async function showOracleModelSelector(ctx: ExtensionContext): Promise<string | 
 
   let availableModels: Model<any>[] = [];
   try {
-    availableModels = await ctx.modelRegistry.getAvailable();
+    availableModels = ctx.modelRegistry.getAvailable();
   } catch (error) {
     ctx.ui.notify(
       `Could not load available models: ${error instanceof Error ? error.message : String(error)}`,

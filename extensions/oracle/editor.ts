@@ -1,5 +1,5 @@
 import { CustomEditor } from "@mariozechner/pi-coding-agent";
-import { matchesKey, truncateToWidth } from "@mariozechner/pi-tui";
+import { matchesKey, truncateToWidth, visibleWidth } from "@mariozechner/pi-tui";
 
 const CURSOR_AT_END = "\x1b[7m \x1b[0m";
 const DIM = "\x1b[2m";
@@ -118,7 +118,7 @@ export class OracleEditor extends CustomEditor {
     const ghost = truncateToWidth(this.getSelectedSuggestion()!, availableColumns, "");
     if (!ghost) return lines;
 
-    const remainingSpaces = " ".repeat(Math.max(0, availableColumns - ghost.length));
+    const remainingSpaces = " ".repeat(Math.max(0, availableColumns - visibleWidth(ghost)));
     const rest = after.slice(availableColumns);
     lines[editableLineIndex] = `${before}${DIM}${ghost}${RESET}${remainingSpaces}${rest}`;
     return lines;
