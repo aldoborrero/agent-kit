@@ -9,6 +9,7 @@
  */
 
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import { createUiColors } from "../_shared/ui-colors.js";
 
 const API_KEY_ENV = "GROQ_API_KEY";
 
@@ -19,7 +20,8 @@ export default function (pi: ExtensionAPI) {
 			return;
 		}
 		if (ctx.hasUI) {
-			ctx.ui.setStatus("groq", ctx.ui.theme.fg("warning", "groq:no-key"));
+			const colors = createUiColors(ctx.ui.theme);
+			ctx.ui.setStatus("groq", colors.warning("groq:no-key"));
 			ctx.ui.notify(`Groq provider loaded, but ${API_KEY_ENV} is not set`, "warning");
 		}
 	});

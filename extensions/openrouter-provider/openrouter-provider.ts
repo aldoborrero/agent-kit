@@ -10,6 +10,7 @@
  */
 
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import { createUiColors } from "../_shared/ui-colors.js";
 
 const API_KEY_ENV = "OPENROUTER_API_KEY";
 
@@ -20,7 +21,8 @@ export default function (pi: ExtensionAPI) {
 			return;
 		}
 		if (ctx.hasUI) {
-			ctx.ui.setStatus("openrouter", ctx.ui.theme.fg("warning", "or:no-key"));
+			const colors = createUiColors(ctx.ui.theme);
+			ctx.ui.setStatus("openrouter", colors.warning("or:no-key"));
 			ctx.ui.notify(`OpenRouter provider loaded, but ${API_KEY_ENV} is not set`, "warning");
 		}
 	});

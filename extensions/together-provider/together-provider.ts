@@ -1,4 +1,5 @@
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import { createUiColors } from "../_shared/ui-colors.js";
 
 const API_KEY_ENV = "TOGETHER_API_KEY";
 
@@ -9,7 +10,8 @@ export default function (pi: ExtensionAPI) {
       return;
     }
     if (ctx.hasUI) {
-      ctx.ui.setStatus("together", ctx.ui.theme.fg("warning", "together:no-key"));
+      const colors = createUiColors(ctx.ui.theme);
+      ctx.ui.setStatus("together", colors.warning("together:no-key"));
       ctx.ui.notify(`Together provider loaded, but ${API_KEY_ENV} is not set`, "warning");
     }
   });
