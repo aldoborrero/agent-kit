@@ -1,4 +1,5 @@
 import type { ParsedInterval } from "./types";
+import { HOURLY_TASK_MINUTE_OFFSET, MS_PER_DAY, MS_PER_HOUR, MS_PER_MINUTE } from "./constants";
 
 const DEFAULT_CRON_EXPR = "*/10 * * * *";
 const DEFAULT_HUMAN_LABEL = "every 10m";
@@ -42,14 +43,14 @@ export function parseLoopInput(input: string): ParsedInterval | null {
 
 export function estimatePeriodMs(expr: string): number {
 	const parts = expr.split(/\s+/);
-	if (parts.length < 5) return 60_000;
+	if (parts.length < 5) return MS_PER_MINUTE;
 	const [minute, hour, dom] = parts;
-	if (minute.startsWith("*/")) return parseInt(minute.slice(2), 10) * 60_000;
-	if (hour.startsWith("*/")) return parseInt(hour.slice(2), 10) * 3_600_000;
-	if (dom.startsWith("*/")) return parseInt(dom.slice(2), 10) * 86_400_000;
-	if (hour === "*" && minute !== "*") return 3_600_000;
-	if (hour !== "*") return 86_400_000;
-	return 60_000;
+	if (minute.startsWith("*/")) return parseInt(minute.slice(2), 10) * MS_PER_MINUTE;
+	if (hour.startsWith("*/")) return parseInt(hour.slice(2), 10) * MS_PER_HOUR;
+	if (dom.startsWith("*/")) return parseInt(dom.slice(2), 10) * MS_PER_DAY;
+	if (hour === "*" && minute !== "*") return MS_PER_HOUR;
+	if (hour !== "*") return MS_PER_DAY;
+	return MS_PER_MINUTE;
 }
 
 function normalizeUnit(unit: string): string {
@@ -75,7 +76,7 @@ function intervalToCron(value: number, unit: string, prompt: string): ParsedInte
 		case "h": {
 			if (value <= 0) value = 1;
 			if (value > 23) value = 24;
-			const minute = 7;
+			const minute = HOURLY_TASK_MINUTE_OFFSET;
 			if (24 % value !== 0) {
 				const nearest = findNearestDivisor(value, 24);
 				rounded = `Rounded ${value}h to ${nearest}h (must divide 24 evenly)`;
@@ -137,7 +138,7 @@ function minutesToCron(minutes: number, prompt: string, rounded?: string): Parse
 	if (nearestHours !== roundedHours) {
 		rounded = `Rounded ${minutes}m to ${nearestHours}h`;
 	}
-	const minute = 7;
+	const minute = HOURLY_TASK_MINUTE_OFFSET;
 	return {
 		cronExpr: `${minute} */${nearestHours} * * *`,
 		humanLabel: `every ${nearestHours}h`,

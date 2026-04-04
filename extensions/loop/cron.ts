@@ -4,6 +4,7 @@ import { mkdir } from "node:fs/promises";
 import { basename, dirname } from "node:path";
 import { registerFancyFooterWidget, refreshFancyFooter } from "../_shared/fancy-footer.js";
 import { createUiColors } from "../_shared/ui-colors.js";
+import { FILE_RELOAD_DEBOUNCE_MS } from "./constants";
 import { registerLoopCommand } from "./loop-command";
 import { getLoopTasksFilePath, loadStoredTasks, saveStoredTasks } from "./persistence";
 import { LoopScheduler } from "./scheduler";
@@ -52,12 +53,10 @@ export default function cronLoopExtension(pi: ExtensionAPI) {
 		if (reloadTimer) {
 			clearTimeout(reloadTimer);
 		}
-		// 300ms matches openclaude's FILE_STABILITY_MS — gives atomic writes
-		// (temp file + rename) time to settle before we read the final content.
 		reloadTimer = setTimeout(() => {
 			reloadTimer = null;
 			void reloadFromDisk();
-		}, 300);
+		}, FILE_RELOAD_DEBOUNCE_MS);
 	}
 
 	async function reloadFromDisk(): Promise<void> {

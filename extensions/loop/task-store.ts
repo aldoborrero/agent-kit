@@ -1,9 +1,17 @@
 import { Cron } from "croner";
 import { estimatePeriodMs } from "./interval-parser";
+import {
+	FALLBACK_FIRE_DELAY_MS,
+	MAX_TASKS,
+	MS_PER_DAY,
+	ONE_SHOT_EXPIRY_DAYS,
+	RECURRING_EXPIRY_DAYS,
+	RECURRING_JITTER_CAP_MS,
+	RECURRING_JITTER_FRAC,
+} from "./constants";
 import type { ParsedInterval, RuntimeCronTask, StoredCronTask } from "./types";
 
-export const MAX_TASKS = 50;
-export const RECURRING_EXPIRY_DAYS = 7;
+export { MAX_TASKS, RECURRING_EXPIRY_DAYS };
 
 export interface TaskStore {
 	list(): RuntimeCronTask[];
@@ -85,8 +93,8 @@ export function buildRuntimeTask(parsed: ParsedInterval, recurring: boolean): Ru
 	const id = generateId();
 	const now = Date.now();
 	const expiresAt = recurring
-		? now + RECURRING_EXPIRY_DAYS * 86_400_000
-		: now + 86_400_000;
+		? now + RECURRING_EXPIRY_DAYS * MS_PER_DAY
+		: now + ONE_SHOT_EXPIRY_DAYS * MS_PER_DAY;
 
 	return hydrateRuntimeTask({
 		id,
@@ -110,7 +118,7 @@ export function hydrateRuntimeTask(
 	const jitterMs = computeJitterMs(task.id, periodMs, task.recurring);
 	const nextFireAt = options.forceImmediate
 		? Date.now()
-		: computeTaskNextFireAt(task, task.lastFiredAt ?? task.createdAt, jitterMs, cron) ?? Date.now() + 60_000;
+		: computeTaskNextFireAt(task, task.lastFiredAt ?? task.createdAt, jitterMs, cron) ?? Date.now() + FALLBACK_FIRE_DELAY_MS;
 
 	return {
 		...task,
@@ -156,7 +164,7 @@ function computeJitterMs(id: string, periodMs: number, recurring: boolean): numb
 	const seed = Math.abs(hash) / 2147483647;
 
 	if (recurring) {
-		const maxJitter = Math.min(periodMs * 0.1, 15 * 60_000);
+		const maxJitter = Math.min(periodMs * RECURRING_JITTER_FRAC, RECURRING_JITTER_CAP_MS);
 		return Math.floor(seed * maxJitter);
 	}
 	return -Math.floor(seed * 90_000);

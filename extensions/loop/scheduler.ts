@@ -1,10 +1,8 @@
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
+import { CHECK_INTERVAL_MS, FALLBACK_FIRE_DELAY_MS, IN_FLIGHT_GUARD_MS, LOCK_PROBE_INTERVAL_MS } from "./constants";
 import { releaseLoopSchedulerLock, tryAcquireLoopSchedulerLock } from "./loop-lock";
 import type { RuntimeCronTask } from "./types";
 import { computeTaskNextFireAt, type TaskStore } from "./task-store";
-
-const CHECK_INTERVAL_MS = 1000;
-const LOCK_PROBE_INTERVAL_MS = 5000;
 
 export interface LoopSchedulerCallbacks {
 	onStatusChange?: () => void;
@@ -140,12 +138,12 @@ export class LoopScheduler {
 				}
 			} else {
 				// Update in-memory nextFireAt first — survives any store.replaceAll()
-				const newNext = computeTaskNextFireAt(task, now, task.jitterMs, task.cron) ?? now + 60_000;
+				const newNext = computeTaskNextFireAt(task, now, task.jitterMs, task.cron) ?? now + FALLBACK_FIRE_DELAY_MS;
 				task.nextFireAt = newNext;
 				this.nextFireAt.set(task.id, newNext);
 				// Guard against double-fire during async write + file-watcher reload
 				this.inFlight.add(task.id);
-				setTimeout(() => this.inFlight.delete(task.id), 2000);
+				setTimeout(() => this.inFlight.delete(task.id), IN_FLIGHT_GUARD_MS);
 			}
 
 			if (this.store.size() === 0) {
