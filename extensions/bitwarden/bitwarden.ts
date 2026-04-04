@@ -1,3 +1,5 @@
+/// <reference path="./node-shim.d.ts" />
+
 /**
  * Bitwarden Extension (via rbw)
  *
@@ -22,6 +24,8 @@ import type {
   ExtensionAPI,
   ExtensionContext,
 } from "@mariozechner/pi-coding-agent";
+import { registerFancyFooterWidget, refreshFancyFooter } from "../_shared/fancy-footer.js";
+import { createUiColors } from "../_shared/ui-colors.js";
 import { Type } from "@sinclair/typebox";
 
 const MASKED = "********";
@@ -57,11 +61,11 @@ function runRbw(args: string[], signal?: AbortSignal): Promise<string> {
     let stdout = "";
     let stderr = "";
 
-    child.stdout.on("data", (chunk: Buffer) => {
+    child.stdout?.on("data", (chunk) => {
       stdout += chunk.toString();
     });
 
-    child.stderr.on("data", (chunk: Buffer) => {
+    child.stderr?.on("data", (chunk) => {
       stderr += chunk.toString();
     });
 
@@ -117,21 +121,69 @@ function isUnlocked(): boolean {
 // ── Extension ────────────────────────────────────────────────────────────────
 
 export default function (pi: ExtensionAPI) {
+  let fancyFooterActive = false;
+  let lastStatus: "ready" | "locked" | "missing" = isAvailable()
+    ? (isUnlocked() ? "ready" : "locked")
+    : "missing";
+  const fancyFooterReady = registerFancyFooterWidget(pi, () => ({
+    id: "pi-agent-kit.bitwarden",
+    label: "Bitwarden",
+    description: "Shows whether the Bitwarden rbw vault is ready, locked, or missing.",
+    defaults: {
+      row: 1,
+      position: 11,
+      align: "right",
+      fill: "none",
+    },
+    textColor: lastStatus === "missing" ? "error" : "warning",
+    visible: () => lastStatus === "locked" || lastStatus === "missing",
+    renderText: () => `bw:${lastStatus}`,
+  })).then((active) => {
+    fancyFooterActive = active;
+    return active;
+  });
+
+  function okResult(text: string) {
+    return {
+      content: [{ type: "text" as const, text }],
+      details: {},
+    };
+  }
+
+  function errorResult(text: string) {
+    return {
+      content: [{ type: "text" as const, text }],
+      isError: true,
+      details: {},
+    };
+  }
+
   // Accept a pre-computed unlock state to avoid a redundant execSync call
   // when the caller already knows the lock status.
   function updateStatus(ctx: ExtensionContext, currentlyUnlocked?: boolean) {
-    if (!ctx.hasUI) return;
+    const available = isAvailable();
+    lastStatus = !available ? "missing" : ((currentlyUnlocked ?? isUnlocked()) ? "ready" : "locked");
 
-    if (!isAvailable()) {
-      ctx.ui.setStatus("bitwarden", ctx.ui.theme.fg("error", "rbw:missing"));
+    if (fancyFooterActive) {
+      if (ctx.hasUI) {
+        ctx.ui.setStatus("bitwarden", undefined);
+      }
+      void refreshFancyFooter(pi);
       return;
     }
 
-    const unlocked = currentlyUnlocked ?? isUnlocked();
-    if (unlocked) {
-      ctx.ui.setStatus("bitwarden", ctx.ui.theme.fg("success", "rbw:unlocked"));
+    if (!ctx.hasUI) return;
+    const colors = createUiColors(ctx.ui.theme);
+
+    if (!available) {
+      ctx.ui.setStatus("bitwarden", colors.danger("rbw:missing"));
+      return;
+    }
+
+    if (lastStatus === "ready") {
+      ctx.ui.setStatus("bitwarden", colors.success("rbw:unlocked"));
     } else {
-      ctx.ui.setStatus("bitwarden", ctx.ui.theme.fg("warning", "rbw:locked"));
+      ctx.ui.setStatus("bitwarden", colors.warning("rbw:locked"));
     }
   }
 
@@ -139,6 +191,13 @@ export default function (pi: ExtensionAPI) {
 
   pi.registerCommand("bw", {
     description: "Bitwarden vault: /bw [unlock|lock|sync|status]",
+    getArgumentCompletions: (prefix: string) => {
+      const values = ["unlock", "lock", "sync", "status"];
+      const trimmed = prefix.trimStart().toLowerCase();
+      if (!trimmed) return values.map((value) => ({ value, label: value }));
+      const filtered = values.filter((value) => value.startsWith(trimmed));
+      return filtered.length > 0 ? filtered.map((value) => ({ value, label: value })) : null;
+    },
     handler: async (args, ctx) => {
       if (!ctx.hasUI) return;
 
@@ -250,23 +309,11 @@ Examples:
     }),
     async execute(_toolCallId, params, signal, _onUpdate, ctx) {
       if (!isAvailable()) {
-        return {
-          content: [{
-            type: "text",
-            text: "rbw is not installed. Install from https://github.com/doy/rbw",
-          }],
-          isError: true,
-        };
+        return errorResult("rbw is not installed. Install from https://github.com/doy/rbw");
       }
 
       if (!isUnlocked()) {
-        return {
-          content: [{
-            type: "text",
-            text: "Vault is locked. Use /bw unlock to unlock it first.",
-          }],
-          isError: true,
-        };
+        return errorResult("Vault is locked. Use /bw unlock to unlock it first.");
       }
 
       const field = params.field ?? "username";
@@ -281,12 +328,7 @@ Examples:
         );
 
         if (!confirmed) {
-          return {
-            content: [{
-              type: "text",
-              text: `User denied access to the "${field}" field.`,
-            }],
-          };
+          return okResult(`User denied access to the "${field}" field.`);
         }
       }
 
@@ -298,9 +340,7 @@ Examples:
             codeArgs.push("--folder", params.folder);
           }
           const code = await runRbw(codeArgs, signal ?? undefined);
-          return {
-            content: [{ type: "text", text: `TOTP code: ${code}` }],
-          };
+          return okResult(`TOTP code: ${code}`);
         }
 
         const args = ["get"];
@@ -342,35 +382,24 @@ Examples:
             }
             parts.push(`Password: ${MASKED}`);
 
-            return {
-              content: [{ type: "text", text: parts.join("\n") }],
-            };
+            return okResult(parts.join("\n"));
           }
 
           if (field === "notes") {
             const notesIdx = lines.findIndex((l) => l.trim() === "Notes:");
             if (notesIdx === -1) {
-              return {
-                content: [{ type: "text", text: "(no notes)" }],
-              };
+              return okResult("(no notes)");
             }
             const notes = lines.slice(notesIdx + 1).join("\n");
-            return {
-              content: [{ type: "text", text: notes || "(empty notes)" }],
-            };
+            return okResult(notes || "(empty notes)");
           }
         }
 
         // For password and custom fields, output is the raw value
-        return {
-          content: [{ type: "text", text: output }],
-        };
+        return okResult(output);
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
-        return {
-          content: [{ type: "text", text: `rbw error: ${msg}` }],
-          isError: true,
-        };
+        return errorResult(`rbw error: ${msg}`);
       }
     },
   });
@@ -393,23 +422,11 @@ The vault must be unlocked first (use /bw unlock command).`,
     }),
     async execute(_toolCallId, params, signal, _onUpdate, _ctx) {
       if (!isAvailable()) {
-        return {
-          content: [{
-            type: "text",
-            text: "rbw is not installed. Install from https://github.com/doy/rbw",
-          }],
-          isError: true,
-        };
+        return errorResult("rbw is not installed. Install from https://github.com/doy/rbw");
       }
 
       if (!isUnlocked()) {
-        return {
-          content: [{
-            type: "text",
-            text: "Vault is locked. Use /bw unlock to unlock it first.",
-          }],
-          isError: true,
-        };
+        return errorResult("Vault is locked. Use /bw unlock to unlock it first.");
       }
 
       try {
@@ -425,9 +442,7 @@ The vault must be unlocked first (use /bw unlock command).`,
 
         // Folder filtering requires tab-separated field output.
         if (params.folder && !hasFieldSupport) {
-          return {
-            content: [{ type: "text", text: "Folder filtering requires rbw with --fields support. Please upgrade rbw (https://github.com/doy/rbw)." }],
-          };
+          return okResult("Folder filtering requires rbw with --fields support. Please upgrade rbw (https://github.com/doy/rbw).");
         }
         let lines = output.split("\n").filter((l) => l.trim());
 
@@ -448,9 +463,7 @@ The vault must be unlocked first (use /bw unlock command).`,
         }
 
         if (lines.length === 0) {
-          return {
-            content: [{ type: "text", text: "No items found matching your criteria." }],
-          };
+          return okResult("No items found matching your criteria.");
         }
 
         // Format output
@@ -472,15 +485,10 @@ The vault must be unlocked first (use /bw unlock command).`,
           result.push(`\n... and ${lines.length - 50} more. Refine your search.`);
         }
 
-        return {
-          content: [{ type: "text", text: result.join("\n") }],
-        };
+        return okResult(result.join("\n"));
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
-        return {
-          content: [{ type: "text", text: `rbw error: ${msg}` }],
-          isError: true,
-        };
+        return errorResult(`rbw error: ${msg}`);
       }
     },
   });
@@ -488,6 +496,7 @@ The vault must be unlocked first (use /bw unlock command).`,
   // ── Lifecycle ─────────────────────────────────────────────────────────────
 
   pi.on("session_start", async (_event, ctx) => {
+    await fancyFooterReady;
     updateStatus(ctx);
   });
 

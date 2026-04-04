@@ -1,3 +1,5 @@
+/// <reference path="./node-shim.d.ts" />
+
 /**
  * Sandbox Extension - OS-level sandboxing for bash commands
  *
@@ -41,8 +43,10 @@ import { spawn } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { SandboxManager, type SandboxRuntimeConfig } from "@anthropic-ai/sandbox-runtime";
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { type BashOperations, createBashTool, getAgentDir } from "@mariozechner/pi-coding-agent";
+import { registerFancyFooterWidget, refreshFancyFooter } from "../_shared/fancy-footer.js";
+import { createUiColors } from "../_shared/ui-colors.js";
 
 interface SandboxConfig extends SandboxRuntimeConfig {
 	enabled?: boolean;
@@ -157,8 +161,8 @@ function createSandboxedBashOps(): BashOperations {
 					}, timeout * 1000);
 				}
 
-				child.stdout?.on("data", onData);
-				child.stderr?.on("data", onData);
+				child.stdout?.on("data", (chunk) => onData(chunk));
+				child.stderr?.on("data", (chunk) => onData(chunk));
 
 				child.on("error", (err) => {
 					if (timeoutHandle) clearTimeout(timeoutHandle);
@@ -205,6 +209,50 @@ export default function (pi: ExtensionAPI) {
 	let cachedBash = createBashTool(projectCwd);
 	let sandboxEnabled = false;
 	let sandboxInitialized = false;
+	let fancyFooterActive = false;
+	let sandboxFooterState: "on" | "restricted" | "off" | "error" = "off";
+	const fancyFooterReady = registerFancyFooterWidget(pi, () => ({
+		id: "pi-agent-kit.sandbox",
+		label: "Sandbox",
+		description: "Shows whether sandboxed bash execution is enabled for the current session.",
+		defaults: {
+			row: 1,
+			position: 13,
+			align: "right",
+			fill: "none",
+		},
+		textColor: sandboxFooterState === "on"
+			? "accent"
+			: (sandboxFooterState === "restricted" ? "warning" : "error"),
+		visible: () => sandboxFooterState !== "off",
+		renderText: () => `sandbox:${sandboxFooterState}`,
+	})).then((active) => {
+		fancyFooterActive = active;
+		return active;
+	});
+
+	function updateSandboxStatus(ctx: ExtensionContext, status: "on" | "restricted" | "off" | "error"): void {
+		sandboxFooterState = status;
+		if (fancyFooterActive) {
+			if (ctx.hasUI) {
+				ctx.ui.setStatus("sandbox", undefined);
+			}
+			void refreshFancyFooter(pi);
+			return;
+		}
+		if (!ctx.hasUI) return;
+		if (status === "off") {
+			ctx.ui.setStatus("sandbox", undefined);
+			return;
+		}
+		const colors = createUiColors(ctx.ui.theme);
+		const text = status === "on"
+			? colors.primary("sandbox:on")
+			: status === "restricted"
+				? colors.warning("sandbox:restricted")
+				: colors.danger("sandbox:error");
+		ctx.ui.setStatus("sandbox", text);
+	}
 
 	pi.registerTool({
 		...cachedBash,
@@ -227,12 +275,15 @@ export default function (pi: ExtensionAPI) {
 	});
 
 	pi.on("session_start", async (_event, ctx) => {
+		await fancyFooterReady;
 		projectCwd = ctx.cwd;
 		cachedBash = createBashTool(projectCwd);
 		const noSandbox = pi.getFlag("no-sandbox") as boolean;
 
 		if (noSandbox) {
 			sandboxEnabled = false;
+			sandboxInitialized = false;
+			updateSandboxStatus(ctx, "off");
 			ctx.ui.notify("Sandbox disabled via --no-sandbox", "warning");
 			return;
 		}
@@ -241,12 +292,16 @@ export default function (pi: ExtensionAPI) {
 
 		if (!config.enabled) {
 			sandboxEnabled = false;
+			sandboxInitialized = false;
+			updateSandboxStatus(ctx, "off");
 			return;
 		}
 
 		const platform = process.platform;
 		if (platform !== "darwin" && platform !== "linux") {
 			sandboxEnabled = false;
+			sandboxInitialized = false;
+			updateSandboxStatus(ctx, "restricted");
 			ctx.ui.notify(`Sandbox not supported on ${platform}`, "warning");
 			return;
 		}
@@ -267,13 +322,12 @@ export default function (pi: ExtensionAPI) {
 			sandboxEnabled = true;
 			sandboxInitialized = true;
 
-			ctx.ui.setStatus(
-				"sandbox",
-				ctx.ui.theme.fg("accent", "sandbox:on"),
-			);
+			updateSandboxStatus(ctx, "on");
 			ctx.ui.notify("Sandbox initialized", "info");
 		} catch (err) {
 			sandboxEnabled = false;
+			sandboxInitialized = false;
+			updateSandboxStatus(ctx, "error");
 			ctx.ui.notify(`Sandbox initialization failed: ${err instanceof Error ? err.message : err}`, "error");
 		}
 	});
@@ -290,6 +344,13 @@ export default function (pi: ExtensionAPI) {
 
 	pi.registerCommand("sandbox", {
 		description: "Toggle sandbox or show status (/sandbox, /sandbox on, /sandbox off)",
+		getArgumentCompletions: (prefix: string) => {
+			const values = ["on", "enable", "off", "disable"];
+			const trimmed = prefix.trimStart().toLowerCase();
+			if (!trimmed) return values.map((value) => ({ value, label: value }));
+			const filtered = values.filter((value) => value.startsWith(trimmed));
+			return filtered.length > 0 ? filtered.map((value) => ({ value, label: value })) : null;
+		},
 		handler: async (args, ctx) => {
 			const arg = args.trim().toLowerCase();
 
@@ -302,6 +363,7 @@ export default function (pi: ExtensionAPI) {
 
 				const platform = process.platform;
 				if (platform !== "darwin" && platform !== "linux") {
+					updateSandboxStatus(ctx, "restricted");
 					ctx.ui.notify(`Sandbox not supported on ${platform}`, "error");
 					return;
 				}
@@ -323,13 +385,12 @@ export default function (pi: ExtensionAPI) {
 					sandboxEnabled = true;
 					sandboxInitialized = true;
 
-					ctx.ui.setStatus(
-						"sandbox",
-						ctx.ui.theme.fg("accent", "sandbox:on"),
-					);
+					updateSandboxStatus(ctx, "on");
 					ctx.ui.notify("Sandbox enabled", "info");
 				} catch (err) {
 					sandboxEnabled = false;
+					sandboxInitialized = false;
+					updateSandboxStatus(ctx, "error");
 					ctx.ui.notify(`Sandbox initialization failed: ${err instanceof Error ? err.message : err}`, "error");
 				}
 				return;
@@ -351,7 +412,7 @@ export default function (pi: ExtensionAPI) {
 					}
 					sandboxInitialized = false;
 				}
-				ctx.ui.setStatus("sandbox", undefined);
+				updateSandboxStatus(ctx, "off");
 				ctx.ui.notify("Sandbox disabled", "info");
 				return;
 			}

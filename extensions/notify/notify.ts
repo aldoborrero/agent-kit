@@ -19,6 +19,8 @@
 
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import path from "node:path";
+import { registerFancyFooterWidget, refreshFancyFooter } from "../_shared/fancy-footer.js";
+import { createUiColors } from "../_shared/ui-colors.js";
 
 // ---------------------------------------------------------------------------
 // Notification helpers
@@ -76,6 +78,24 @@ export default function (pi: ExtensionAPI) {
 	let agentStartTime: number | null = null;
 	let turnCount = 0;
 	let filesChanged = 0;
+	let fancyFooterActive = false;
+	const fancyFooterReady = registerFancyFooterWidget(pi, () => ({
+		id: "pi-agent-kit.notify",
+		label: "Notify",
+		description: "Shows when desktop notifications are disabled for the current session.",
+		defaults: {
+			row: 1,
+			position: 16,
+			align: "right",
+			fill: "none",
+		},
+		textColor: "warning",
+		visible: () => !enabled,
+		renderText: () => "notify:off",
+	})).then((active) => {
+		fancyFooterActive = active;
+		return active;
+	});
 
 	// CLI flag: --no-notify disables notifications at startup.
 	pi.registerFlag("notify", {
@@ -85,17 +105,26 @@ export default function (pi: ExtensionAPI) {
 	});
 
 	function updateStatus(ctx: ExtensionContext): void {
+		if (fancyFooterActive) {
+			if (ctx.hasUI) {
+				ctx.ui.setStatus("notify", undefined);
+			}
+			void refreshFancyFooter(pi);
+			return;
+		}
 		if (!ctx.hasUI) return;
 		// Only show when off — on is the expected state
+		const colors = createUiColors(ctx.ui.theme);
 		ctx.ui.setStatus(
 			"notify",
 			enabled
 				? undefined
-				: ctx.ui.theme.fg("warning", "notify:off"),
+				: colors.warning("notify:off"),
 		);
 	}
 
 	pi.on("session_start", async (_event, ctx) => {
+		await fancyFooterReady;
 		enabled = pi.getFlag("notify") !== false;
 		updateStatus(ctx);
 	});

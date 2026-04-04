@@ -23,6 +23,8 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { DynamicBorder, getSettingsListTheme } from "@mariozechner/pi-coding-agent";
+import { registerFancyFooterWidget, refreshFancyFooter } from "../_shared/fancy-footer.js";
+import { createUiColors } from "../_shared/ui-colors.js";
 import { Container, type SettingItem, SettingsList, Text } from "@mariozechner/pi-tui";
 import { createProvider, detectProvider, type ProviderName, type STTProvider } from "./providers.js";
 import { DaemonRecorder, type Recorder, SpawnRecorder } from "./recorder.js";
@@ -86,6 +88,24 @@ export default function voiceExtension(pi: ExtensionAPI) {
 	let recorder: Recorder | null = null;
 	let levelInterval: ReturnType<typeof setInterval> | null = null;
 	let hints = "";
+	let fancyFooterActive = false;
+	const fancyFooterReady = registerFancyFooterWidget(pi, () => ({
+		id: "pi-agent-kit.voice",
+		label: "Voice",
+		description: "Shows voice input provider and active recording/transcription state.",
+		defaults: {
+			row: 1,
+			position: 17,
+			align: "right",
+			fill: "none",
+		},
+		textColor: state === "recording" ? "success" : "warning",
+		visible: () => state === "recording" || state === "transcribing",
+		renderText: () => state === "recording" ? "voice:rec" : "voice:transcribing",
+	})).then((active) => {
+		fancyFooterActive = active;
+		return active;
+	});
 
 	// Read shortcut synchronously — registerShortcut runs at load time
 	const initConfig = loadSavedConfigSync();
@@ -133,14 +153,22 @@ export default function voiceExtension(pi: ExtensionAPI) {
 	}
 
 	function updateStatus(ctx: ExtensionContext): void {
+		if (fancyFooterActive) {
+			if (ctx.hasUI) {
+				ctx.ui.setStatus("voice", undefined);
+			}
+			void refreshFancyFooter(pi);
+			return;
+		}
 		if (!ctx.hasUI) return;
+		const colors = createUiColors(ctx.ui.theme);
 
 		switch (state) {
 			case "idle":
 				// Show provider name quietly in footer — no popup
 				ctx.ui.setStatus(
 					"voice",
-					providerName ? ctx.ui.theme.fg("muted", `voice:${providerName}`) : undefined,
+					providerName ? colors.meta(`voice:${providerName}`) : undefined,
 				);
 				break;
 			case "recording": {
@@ -149,14 +177,14 @@ export default function voiceExtension(pi: ExtensionAPI) {
 					: "";
 				ctx.ui.setStatus(
 					"voice",
-					ctx.ui.theme.fg("success", "●") + " REC" + bars,
+					colors.success("●") + " REC" + bars,
 				);
 				break;
 			}
 			case "transcribing":
 				ctx.ui.setStatus(
 					"voice",
-					ctx.ui.theme.fg("warning", "●") + " transcribing…",
+					colors.warning("●") + " transcribing…",
 				);
 				break;
 		}
@@ -164,13 +192,18 @@ export default function voiceExtension(pi: ExtensionAPI) {
 
 	function showError(ctx: ExtensionContext, msg: string): void {
 		if (!ctx.hasUI) return;
-		ctx.ui.setStatus("voice", ctx.ui.theme.fg("error", "●") + " " + msg);
+		if (!fancyFooterActive) {
+			const colors = createUiColors(ctx.ui.theme);
+			ctx.ui.setStatus("voice", colors.danger("●") + " " + msg);
+			setTimeout(() => {
+				if (state === "idle") {
+					ctx.ui.setStatus("voice", undefined);
+				}
+			}, 3000);
+		} else {
+			void refreshFancyFooter(pi);
+		}
 		ctx.ui.notify(msg, "error");
-		setTimeout(() => {
-			if (state === "idle") {
-				ctx.ui.setStatus("voice", undefined);
-			}
-		}, 3000);
 	}
 
 	function clearLevelInterval(): void {
@@ -360,9 +393,10 @@ export default function voiceExtension(pi: ExtensionAPI) {
 					];
 
 					await ctx.ui.custom((tui, theme, _kb, done) => {
+						const colors = createUiColors(theme);
 						const container = new Container();
-						container.addChild(new DynamicBorder((s: string) => theme.fg("accent", s)));
-						container.addChild(new Text(theme.fg("accent", theme.bold(" Voice Settings")), 1, 0));
+						container.addChild(new DynamicBorder((s: string) => colors.primary(s)));
+						container.addChild(new Text(colors.primary(theme.bold(" Voice Settings")), 1, 0));
 
 						const settingsList = new SettingsList(
 							items,
@@ -384,9 +418,9 @@ export default function voiceExtension(pi: ExtensionAPI) {
 
 						container.addChild(settingsList);
 						container.addChild(
-							new Text(theme.fg("dim", " ↑↓ navigate  •  space/enter cycle  •  esc close"), 1, 0),
+							new Text(colors.subtle(" ↑↓ navigate  •  space/enter cycle  •  esc close"), 1, 0),
 						);
-						container.addChild(new DynamicBorder((s: string) => theme.fg("accent", s)));
+						container.addChild(new DynamicBorder((s: string) => colors.primary(s)));
 
 						return {
 							render: (w) => container.render(w),
@@ -483,6 +517,7 @@ export default function voiceExtension(pi: ExtensionAPI) {
 	// ─── Events ─────────────────────────────────────────────────────
 
 	pi.on("session_start", async (_event, ctx) => {
+		await fancyFooterReady;
 		// Load persisted config (takes priority over env vars)
 		const saved = await loadSavedConfig();
 		if (saved.lang) config.lang = saved.lang;

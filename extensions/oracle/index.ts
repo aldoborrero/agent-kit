@@ -16,6 +16,7 @@ import {
   type ExtensionContext,
 } from "@mariozechner/pi-coding-agent";
 import { Container, fuzzyFilter, Input, Spacer, Text } from "@mariozechner/pi-tui";
+import { registerFancyFooterWidget, refreshFancyFooter } from "../_shared/fancy-footer.js";
 import { createUiColors } from "../_shared/ui-colors.js";
 import { OracleEditor } from "./editor";
 
@@ -32,10 +33,13 @@ const ORACLE_SYSTEM_PROMPT = `You predict what the user will most likely type ne
 
 Rules:
 - Output only valid JSON.
-- Return a JSON array containing 1 to 3 likely next user messages.
+- Return a JSON array containing up to 3 likely next user messages.
 - Each array item must be a plain string.
 - Rank the array by probability in descending order.
 - The most likely next user message must always be at index 0.
+- Return only 1 suggestion when there is a single clear next step.
+- Only include 2 or 3 suggestions when they are meaningfully different options.
+- Do not pad the array with near-duplicates, paraphrases, or tiny variations.
 - If you include additional candidates, they must be less likely than the previous item.
 - Prefer 2-12 words per string.
 - Match the user's style and language.
@@ -130,7 +134,7 @@ function buildSuggestionInput(messages: AgentMessage[], cwd: string): string | n
     "Recent conversation:",
     rendered,
     "",
-    "Reply with ONLY a JSON array of 1 to 3 likely next user messages.",
+    "Reply with ONLY a JSON array of up to 3 likely next user messages. Use fewer when the options are too similar.",
   ].join("\n");
 }
 
@@ -584,6 +588,24 @@ export default function oracleExtension(pi: ExtensionAPI): void {
     lastAssistantContentPreview: null,
     generationId: 0,
   };
+  let fancyFooterActive = false;
+  const fancyFooterReady = registerFancyFooterWidget(pi, () => ({
+    id: "pi-agent-kit.oracle",
+    label: "Oracle",
+    description: "Shows whether oracle suggestions are enabled for the current session.",
+    defaults: {
+      row: 1,
+      position: 12,
+      align: "right",
+      fill: "none",
+    },
+    textColor: state.generating ? "warning" : "accent",
+    visible: () => state.generating || state.suggestions.length > 0,
+    renderText: () => state.generating ? "oracle:gen" : "oracle:ready",
+  })).then((active) => {
+    fancyFooterActive = active;
+    return active;
+  });
 
   function getSelectedSuggestion(): string | null {
     if (state.suggestions.length === 0) return null;
@@ -648,6 +670,9 @@ export default function oracleExtension(pi: ExtensionAPI): void {
       ctx.ui.setWidget(WIDGET_ID, undefined);
       ctx.ui.setStatus(STATUS_ID, undefined);
     }
+    if (fancyFooterActive) {
+      void refreshFancyFooter(pi);
+    }
   }
 
   function renderSuggestion(ctx: ExtensionContext): void {
@@ -657,6 +682,9 @@ export default function oracleExtension(pi: ExtensionAPI): void {
     if (!state.enabled || !selectedSuggestion) {
       ctx.ui.setWidget(WIDGET_ID, undefined);
       ctx.ui.setStatus(STATUS_ID, undefined);
+      if (fancyFooterActive) {
+        void refreshFancyFooter(pi);
+      }
       return;
     }
 
@@ -665,24 +693,31 @@ export default function oracleExtension(pi: ExtensionAPI): void {
     const nextSuggestion = getNextSuggestion();
     const widgetLines = nextSuggestion
       ? [
-          `${colors.meta(`oracle next[${nextSuggestion.index + 1}/${state.suggestions.length}]:`)} ${colors.primary(nextSuggestion.text)}`,
-          colors.meta(`Current is in editor [${state.selectedSuggestionIndex + 1}/${state.suggestions.length}] · Up/Down to cycle · Tab/Right to insert`),
+          `${colors.meta(`Oracle next [${nextSuggestion.index + 1}/${state.suggestions.length}]:`)} ${colors.primary(nextSuggestion.text)}`,
+          colors.meta("Alt+Up/Down to cycle · Tab/Right to insert · Esc to dismiss"),
         ]
       : [
-          `${colors.meta(`oracle[${state.selectedSuggestionIndex + 1}/${state.suggestions.length}]:`)} ${colors.primary(selectedSuggestion)}`,
-          colors.meta("Current is in editor · Tab/Right to insert"),
+          `${colors.meta(`Oracle [${state.selectedSuggestionIndex + 1}/${state.suggestions.length}]:`)} ${colors.primary(selectedSuggestion)}`,
+          colors.meta("Tab/Right to insert · Esc to dismiss"),
         ];
     ctx.ui.setWidget(WIDGET_ID, widgetLines);
+    if (fancyFooterActive) {
+      ctx.ui.setStatus(STATUS_ID, undefined);
+      void refreshFancyFooter(pi);
+      return;
+    }
     ctx.ui.setStatus(STATUS_ID, colors.primary("oracle:on"));
   }
 
   pi.on("session_start", async (_event, ctx) => {
+    await fancyFooterReady;
     installEditor(ctx);
     clearSuggestion(ctx);
     renderSuggestion(ctx);
   });
 
   pi.on("session_switch", async (_event, ctx) => {
+    await fancyFooterReady;
     installEditor(ctx);
     clearSuggestion(ctx);
     renderSuggestion(ctx);

@@ -2,6 +2,7 @@ import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-age
 import { watch, type FSWatcher } from "node:fs";
 import { mkdir } from "node:fs/promises";
 import { basename, dirname } from "node:path";
+import { registerFancyFooterWidget, refreshFancyFooter } from "../_shared/fancy-footer.js";
 import { createUiColors } from "../_shared/ui-colors.js";
 import { registerLoopCommand } from "./loop-command";
 import { getLoopTasksFilePath, loadStoredTasks, saveStoredTasks } from "./persistence";
@@ -19,6 +20,27 @@ export default function cronLoopExtension(pi: ExtensionAPI) {
 	let persistChain: Promise<void> = Promise.resolve();
 	let fileWatcher: FSWatcher | null = null;
 	let reloadTimer: ReturnType<typeof setTimeout> | null = null;
+	let fancyFooterActive = false;
+	const fancyFooterReady = registerFancyFooterWidget(pi, () => ({
+		id: "pi-agent-kit.loop",
+		label: "Loop",
+		description: "Scheduled loop tasks for the current session.",
+		defaults: {
+			row: 1,
+			position: 10,
+			align: "right",
+			fill: "none",
+		},
+		textColor: scheduler.isSchedulerOwner() ? "success" : "muted",
+		visible: () => store.size() > 0,
+		renderText: () => `loop:${store.size()}${scheduler.isSchedulerOwner() ? "" : " passive"}`,
+	})).then((active) => {
+		fancyFooterActive = active;
+		if (active && latestCtx?.hasUI) {
+			latestCtx.ui.setStatus("loop", undefined);
+		}
+		return active;
+	});
 
 	function persistTasks(): void {
 		persistChain = persistChain
@@ -92,6 +114,13 @@ export default function cronLoopExtension(pi: ExtensionAPI) {
 	}
 
 	function updateStatus(): void {
+		if (fancyFooterActive) {
+			if (latestCtx?.hasUI) {
+				latestCtx.ui.setStatus("loop", undefined);
+			}
+			void refreshFancyFooter(pi);
+			return;
+		}
 		if (!latestCtx?.hasUI) return;
 		if (store.size() === 0) {
 			latestCtx.ui.setStatus("loop", undefined);
@@ -101,7 +130,9 @@ export default function cronLoopExtension(pi: ExtensionAPI) {
 		const suffix = scheduler.isSchedulerOwner() ? "" : " (passive)";
 		latestCtx.ui.setStatus(
 			"loop",
-			colors.success(`loop:${store.size()}${suffix}`),
+			scheduler.isSchedulerOwner()
+				? colors.success(`loop:${store.size()}${suffix}`)
+				: colors.meta(`loop:${store.size()}${suffix}`),
 		);
 	}
 
@@ -173,6 +204,7 @@ export default function cronLoopExtension(pi: ExtensionAPI) {
 
 	pi.on("session_start", async (_event, ctx) => {
 		setContext(ctx);
+		await fancyFooterReady;
 		store.replaceAll(await loadStoredTasks());
 		updateStatus();
 		await persistChain;

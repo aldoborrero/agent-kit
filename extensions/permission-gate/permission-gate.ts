@@ -10,10 +10,52 @@
  * URL: https://github.com/Mic92/dotfiles/blob/main/home/.pi/agent/extensions/permission-gate.ts
  */
 
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
+import { registerFancyFooterWidget, refreshFancyFooter } from "../_shared/fancy-footer.js";
+import { createUiColors } from "../_shared/ui-colors.js";
 
 export default function (pi: ExtensionAPI) {
   let enabled = true;
+  let fancyFooterActive = false;
+  let latestCtx: ExtensionContext | undefined;
+  const fancyFooterReady = registerFancyFooterWidget(pi, () => ({
+    id: "pi-agent-kit.permission-gate",
+    label: "Permission Gate",
+    description: "Shows whether dangerous bash commands require confirmation.",
+    defaults: {
+      row: 1,
+      position: 14,
+      align: "right",
+      fill: "none",
+    },
+    textColor: "warning",
+    visible: () => !enabled,
+    renderText: () => "perm:off",
+  })).then((active) => {
+    fancyFooterActive = active;
+    if (active && latestCtx?.hasUI) {
+      latestCtx.ui.setStatus("permission-gate", undefined);
+    }
+    return active;
+  });
+
+  function updateStatus(ctx: ExtensionContext): void {
+    latestCtx = ctx;
+    if (fancyFooterActive) {
+      if (ctx.hasUI) {
+        ctx.ui.setStatus("permission-gate", undefined);
+      }
+      void refreshFancyFooter(pi);
+      return;
+    }
+    if (!ctx.hasUI) return;
+    const colors = createUiColors(ctx.ui.theme);
+    if (enabled) {
+      ctx.ui.setStatus("permission-gate", colors.warning("gate:on"));
+    } else {
+      ctx.ui.setStatus("permission-gate", undefined);
+    }
+  }
 
   const dangerousPatterns: { pattern: RegExp; label: string }[] = [
     { pattern: /\brm\s+(-[^\s]*r|--recursive)/, label: "recursive delete" },
@@ -73,17 +115,13 @@ export default function (pi: ExtensionAPI) {
       if (!ctx.hasUI) return;
 
       enabled = !enabled;
+      updateStatus(ctx);
       if (enabled) {
-        ctx.ui.setStatus(
-          "permission-gate",
-          ctx.ui.theme.fg("warning", "gate:on"),
-        );
         ctx.ui.notify(
           "Permission gate enabled — dangerous commands require approval",
           "info",
         );
       } else {
-        ctx.ui.setStatus("permission-gate", undefined);
         ctx.ui.notify("Permission gate disabled", "info");
       }
     },
@@ -91,9 +129,8 @@ export default function (pi: ExtensionAPI) {
 
   // Show status on startup
   pi.on("session_start", async (_event, ctx) => {
-    if (enabled && ctx.hasUI) {
-      ctx.ui.setStatus("permission-gate", ctx.ui.theme.fg("warning", "gate:on"));
-    }
+    await fancyFooterReady;
+    updateStatus(ctx);
   });
 
   pi.on("tool_call", async (event, ctx) => {

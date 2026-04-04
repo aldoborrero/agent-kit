@@ -15,8 +15,51 @@ import type {
   ExtensionAPI,
   ExtensionContext,
 } from "@mariozechner/pi-coding-agent";
+import { registerFancyFooterWidget, refreshFancyFooter } from "../_shared/fancy-footer.js";
+import { createUiColors } from "../_shared/ui-colors.js";
 
 export default function (pi: ExtensionAPI) {
+  let fancyFooterActive = false;
+  let direnvStatus: "on" | "blocked" | "error" | "off" = "off";
+  const fancyFooterReady = registerFancyFooterWidget(pi, () => ({
+    id: "pi-agent-kit.direnv",
+    label: "Direnv",
+    description: "Shows whether direnv loaded successfully or is blocked for the current session.",
+    defaults: {
+      row: 1,
+      position: 15,
+      align: "right",
+      fill: "none",
+    },
+    textColor: direnvStatus === "error" ? "error" : "warning",
+    visible: () => direnvStatus === "blocked" || direnvStatus === "error",
+    renderText: () => `direnv:${direnvStatus}`,
+  })).then((active) => {
+    fancyFooterActive = active;
+    return active;
+  });
+
+  function updateStatus(ctx: ExtensionContext, status: "on" | "blocked" | "error" | "off"): void {
+    direnvStatus = status;
+    if (fancyFooterActive) {
+      if (ctx.hasUI) {
+        ctx.ui.setStatus("direnv", undefined);
+      }
+      void refreshFancyFooter(pi);
+      return;
+    }
+    if (!ctx.hasUI) return;
+    if (status === "off" || status === "on") {
+      ctx.ui.setStatus("direnv", undefined);
+      return;
+    }
+    const colors = createUiColors(ctx.ui.theme);
+    const text = status === "blocked"
+      ? colors.warning("direnv:blocked")
+      : colors.danger("direnv:error");
+    ctx.ui.setStatus("direnv", text);
+  }
+
   function loadDirenv(cwd: string, ctx: ExtensionContext) {
     try {
       const output = execSync("direnv export json", {
@@ -26,7 +69,7 @@ export default function (pi: ExtensionAPI) {
       });
 
       if (!output.trim()) {
-        // No env changes - direnv is available but no .envrc or already loaded
+        updateStatus(ctx, "off");
         return;
       }
 
@@ -41,19 +84,15 @@ export default function (pi: ExtensionAPI) {
         }
       }
 
-      if (ctx.hasUI && loadedCount > 0) {
-        // Success is the expected state — clear any previous error
-        ctx.ui.setStatus("direnv", undefined);
-      }
-    } catch {
-      // direnv not available or .envrc blocked/failed - show error indicator
-      if (ctx.hasUI) {
-        ctx.ui.setStatus("direnv", ctx.ui.theme.fg("error", "● direnv"));
-      }
+      updateStatus(ctx, loadedCount > 0 ? "on" : "off");
+    } catch (error) {
+      const message = error instanceof Error ? error.message.toLowerCase() : String(error).toLowerCase();
+      updateStatus(ctx, /allow|blocked|denied|not allowed/.test(message) ? "blocked" : "error");
     }
   }
 
   pi.on("session_start", async (_event, ctx) => {
+    await fancyFooterReady;
     loadDirenv(ctx.cwd, ctx);
   });
 
