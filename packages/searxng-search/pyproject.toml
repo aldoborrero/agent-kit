@@ -1,0 +1,23 @@
+[project]
+name = "searxng-search"
+version = "0.1.0"
+description = "CLI for querying SearXNG instances with LLM-friendly output"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = []
+
+[project.scripts]
+searxng-search = "searxng_search.cli:main"
+
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.mypy]
+python_version = "3.11"
+files = ["searxng_search"]
+strict = true
+warn_unreachable = true

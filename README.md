@@ -26,9 +26,10 @@ pi-agent-kit/
 │   ├── ast-grep/     # AST-based structural code search
 │   ├── kagi-search/  # Privacy-focused search
 │   ├── pexpect-cli/  # Interactive CLI automation
+│   ├── searxng-search/ # Self-hosted SearXNG search skill
 │   └── superpowers/  # 13 advanced workflow skills
 ├── themes/           # Color themes (lavender)
-└── packages/         # Nix packages (pexpect-cli)
+└── packages/         # Nix packages (pexpect-cli, searxng-search)
 ```
 
 ## Pi Extensions
@@ -128,6 +129,7 @@ Markdown-based instructions that teach AI agents how to use external tools. Comp
 | [`/ast-grep`](skills/ast-grep/SKILL.md) | Structural code search using AST patterns — find code by structure, not text |
 | [`/pexpect-cli`](skills/pexpect-cli/SKILL.md) | Automate interactive CLI programs (SSH, databases, editors) with pexpect and pueue |
 | [`/kagi-search`](skills/kagi-search/SKILL.md) | Privacy-focused web search via Kagi with Quick Answer support |
+| [`/searxng-search`](skills/searxng-search/SKILL.md) | Query a self-hosted or public SearXNG instance with normalized, LLM-friendly output |
 
 ### Superpowers Skills
 
@@ -176,13 +178,15 @@ Workflow templates that orchestrate agents into chains via the subagent extensio
 | Package | Description |
 |---------|-------------|
 | [`pexpect-cli`](packages/pexpect-cli/README.md) | Persistent pexpect sessions via pueue — server/client CLI for interactive automation |
+| [`searxng-search`](packages/searxng-search/README.md) | CLI for querying SearXNG instances with normalized, LLM-friendly output |
 
 ## Development
 
 ```bash
-nix develop          # Enter dev shell
-nix fmt              # Format code
-nix build .#pexpect-cli  # Build packages
+nix develop               # Enter dev shell
+nix fmt                   # Format code
+nix build .#pexpect-cli   # Build pexpect-cli
+nix build .#searxng-search # Build searxng-search
 ```
 
 ## License

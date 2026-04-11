@@ -17,9 +17,10 @@ pi-agent-kit/
 │   ├── ast-grep/     # AST-based structural code search
 │   ├── kagi-search/  # Privacy-focused web search
 │   ├── pexpect-cli/  # Interactive CLI automation
+│   ├── searxng-search/ # Self-hosted SearXNG search skill
 │   └── superpowers/  # 13 workflow skills (brainstorming, TDD, debugging, etc.)
 ├── themes/           # Color themes (lavender)
-└── packages/         # Nix packages (pexpect-cli)
+└── packages/         # Nix packages (pexpect-cli, searxng-search)
 ```
 
 ## Environment Variables
