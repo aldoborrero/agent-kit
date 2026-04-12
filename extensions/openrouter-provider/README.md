@@ -42,6 +42,35 @@ Access frontier models from multiple providers through a single [OpenRouter](htt
 | ByteDance Seed 2.0 Mini | 262K | $0.10 | $0.40 | Yes | Yes |
 | Inception Mercury 2 | 128K | $0.25 | $0.75 | Yes | No |
 
+## Routing providers
+
+OpenRouter can route the same model through different upstream providers. This extension now exposes project-local routing config via:
+
+```text
+/openrouter status
+/openrouter only <model-id> <provider-slug[,provider-slug,...]>
+/openrouter order <model-id> <provider-slug[,provider-slug,...]>
+/openrouter clear
+/openrouter clear <model-id>
+```
+
+Examples:
+
+```text
+/openrouter only google/gemini-2.5-pro google-vertex
+/openrouter order google/gemini-2.5-pro google-vertex,google-ai-studio
+/openrouter clear google/gemini-2.5-pro
+```
+
+This writes project-local config to:
+
+```text
+.pi/openrouter-provider.json
+```
+
+using OpenRouter routing fields under the hood (`provider.only` / `provider.order`).
+
 ## Usage
 
 Switch models with `Ctrl+L` or `/model` in pi.
+If you configure routing for a model, future requests using that model will include the configured OpenRouter provider preferences.
