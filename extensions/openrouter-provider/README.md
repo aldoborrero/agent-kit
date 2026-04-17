@@ -10,7 +10,7 @@ Access frontier models from multiple providers through a single [OpenRouter](htt
 
 ## Why OpenRouter?
 
-- **Chinese-origin models** (Kimi, ByteDance) — no international API, OpenRouter is the access path
+- **Chinese-origin models** (Kimi, ByteDance, MiniMax, Zhipu, Qwen) — no international API, OpenRouter is the access path
 - **Google Gemini** — no GCP project or OAuth needed, just an API key
 - **xAI Grok** — unified access alongside other providers
 - **Single API key** — one key for all providers, OpenAI-compatible
@@ -22,6 +22,11 @@ Access frontier models from multiple providers through a single [OpenRouter](htt
 | Model | Context | Input $/M | Output $/M | Reasoning | Vision |
 |-------|---------|-----------|------------|-----------|--------|
 | Kimi K2.5 | 262K | $0.42 | $2.20 | Yes | Yes |
+| MiniMax M2.7 | 1M | $0.15 | $0.60 | Yes | Yes |
+| GLM 5.1 | 131K | $0.25 | $1.00 | Yes | Yes |
+| **Qwen3.6 Plus** | 1M | $0.325 | $1.95 | Yes | No |
+| **Qwen3.5 397B** | 262K | $0.39 | $2.34 | Yes | Yes |
+| **DeepSeek V3.2** | **164K** | **$0.26** | **$0.38** | **Yes** | **No** |
 | Gemini 3.1 Pro | 1M | $2.00 | $12.00 | Yes | Yes |
 | Gemini 2.5 Pro | 1M | $1.25 | $10.00 | Yes | Yes |
 | Grok 4.20 Beta | 2M | $2.00 | $6.00 | Yes | Yes |
@@ -65,7 +70,21 @@ Examples:
 This writes project-local config to:
 
 ```text
-.pi/openrouter-provider.json
+.pi/settings.json
+```
+
+under the key:
+
+```json
+{
+  "openrouterProvider": {
+    "routing": {
+      "google/gemini-2.5-pro": {
+        "only": ["google-vertex"]
+      }
+    }
+  }
+}
 ```
 
 using OpenRouter routing fields under the hood (`provider.only` / `provider.order`).
