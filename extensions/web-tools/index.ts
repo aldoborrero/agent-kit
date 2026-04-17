@@ -1,9 +1,14 @@
 import { complete, type Message } from "@mariozechner/pi-ai";
-import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
+import { SettingsManager, type ExtensionAPI, type ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
+import { promises as fs } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
 
 const EXA_API_URL = "https://api.exa.ai/search";
 const BRAVE_SEARCH_URL = "https://api.search.brave.com/res/v1/web/search";
+const SEARXNG_CONFIG_PATH = join(homedir(), ".config", "searxng-search", "config.json");
+const WEB_TOOLS_SETTINGS_KEY = "webTools";
 const DEFAULT_FETCH_MAX_CHARS = 20_000;
 const MAX_FETCH_MAX_CHARS = 100_000;
 const DEFAULT_SEARCH_RESULTS = 8;
@@ -36,6 +41,33 @@ interface BraveResponse {
     results?: BraveResult[];
   };
 }
+
+interface SearxResult {
+  title?: string | null;
+  url?: string | null;
+  link?: string | null;
+  content?: string | null;
+  snippet?: string | null;
+  engine?: string | null;
+  engines?: string[] | null;
+  score?: number | null;
+  category?: string | null;
+  publishedDate?: string | null;
+  published_date?: string | null;
+}
+
+interface SearxResponse {
+  query?: string;
+  results?: SearxResult[];
+}
+
+type WebSearchProvider = "auto" | "exa" | "brave" | "searx";
+type WebFetchProvider = "jina" | "native";
+
+type WebToolsConfig = {
+  defaultProvider?: WebSearchProvider;
+  defaultFetchProvider?: WebFetchProvider;
+};
 
 type SearchResult = {
   title: string;
@@ -224,13 +256,191 @@ function buildBraveSnippet(result: BraveResult): string | undefined {
   return truncate(parts.join(" "), 320).text;
 }
 
+function normalizeSearxResult(result: SearxResult): SearchResult | null {
+  const url = result.url?.trim() || result.link?.trim();
+  if (!url) return null;
+
+  const rawSnippet = result.content?.trim() || result.snippet?.trim() || undefined;
+  return {
+    title: result.title?.trim() || url,
+    url,
+    snippet: rawSnippet ? truncate(rawSnippet.replace(/\s+/g, " "), 320).text : undefined,
+    published: result.publishedDate ?? result.published_date ?? undefined,
+  };
+}
+
+function dedupeByUrl(results: SearchResult[]): SearchResult[] {
+  const seen = new Set<string>();
+  const deduped: SearchResult[] = [];
+  for (const result of results) {
+    if (seen.has(result.url)) continue;
+    seen.add(result.url);
+    deduped.push(result);
+  }
+  return deduped;
+}
+
+function resolveWebToolsConfigPath(cwd: string): string {
+  return join(cwd, ".pi", "settings.json");
+}
+
+function normalizeWebToolsConfig(raw: unknown): WebToolsConfig {
+  if (!raw || typeof raw !== "object") return {};
+  const obj = raw as Record<string, unknown>;
+  const config: WebToolsConfig = {};
+  const candidate = obj.defaultProvider;
+  if (candidate === "auto" || candidate === "exa" || candidate === "brave" || candidate === "searx") {
+    config.defaultProvider = candidate;
+  }
+  const fetchCandidate = obj.defaultFetchProvider;
+  if (fetchCandidate === "jina" || fetchCandidate === "native") {
+    config.defaultFetchProvider = fetchCandidate;
+  }
+  return config;
+}
+
+async function withSettingsManager<T>(cwd: string, fn: (manager: SettingsManager) => Promise<T> | T): Promise<T> {
+  const manager = SettingsManager.create(cwd);
+  await manager.reload();
+  return await fn(manager);
+}
+
+async function loadWebToolsConfig(cwd: string): Promise<WebToolsConfig> {
+  return await withSettingsManager(cwd, (manager) => {
+    const projectSettings = manager.getProjectSettings() as Record<string, unknown>;
+    return normalizeWebToolsConfig(projectSettings[WEB_TOOLS_SETTINGS_KEY]);
+  });
+}
+
+async function saveWebToolsConfig(cwd: string, config: WebToolsConfig): Promise<void> {
+  await withSettingsManager(cwd, async (manager) => {
+    const projectSettings = manager.getProjectSettings() as Record<string, unknown>;
+    projectSettings[WEB_TOOLS_SETTINGS_KEY] = config;
+
+    const internal = manager as unknown as {
+      modifiedProjectFields: Set<string>;
+      saveProjectSettings: (settings: Record<string, unknown>) => void;
+      flush: () => Promise<void>;
+    };
+    internal.modifiedProjectFields.add(WEB_TOOLS_SETTINGS_KEY);
+    internal.saveProjectSettings(projectSettings);
+    await internal.flush();
+  });
+}
+
+async function clearWebToolsConfig(cwd: string): Promise<void> {
+  await withSettingsManager(cwd, async (manager) => {
+    const projectSettings = manager.getProjectSettings() as Record<string, unknown>;
+    delete projectSettings[WEB_TOOLS_SETTINGS_KEY];
+
+    const internal = manager as unknown as {
+      modifiedProjectFields: Set<string>;
+      saveProjectSettings: (settings: Record<string, unknown>) => void;
+      flush: () => Promise<void>;
+    };
+    internal.modifiedProjectFields.add(WEB_TOOLS_SETTINGS_KEY);
+    internal.saveProjectSettings(projectSettings);
+    await internal.flush();
+  });
+}
+
+async function resolveDefaultProvider(cwd: string): Promise<WebSearchProvider> {
+  const config = await loadWebToolsConfig(cwd);
+  return config.defaultProvider ?? "auto";
+}
+
+async function resolveDefaultFetchProvider(cwd: string): Promise<WebFetchProvider> {
+  const config = await loadWebToolsConfig(cwd);
+  return config.defaultFetchProvider ?? "jina";
+}
+
+function stripHtmlToText(html: string): string {
+  return html
+    .replace(/<!--.*?-->/gs, "")
+    .replace(/<script[\s\S]*?<\/script>/gi, "")
+    .replace(/<style[\s\S]*?<\/style>/gi, "")
+    .replace(/<noscript[\s\S]*?<\/noscript>/gi, "")
+    .replace(/<\/?(p|div|br|hr|h[1-6]|li|tr|blockquote|pre|section|article|header|footer|nav|main|aside)[\s>][^>]*>/gi, "\n")
+    .replace(/<[^>]+>/g, "")
+    .replace(/&nbsp;/gi, " ")
+    .replace(/&amp;/gi, "&")
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">")
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;/gi, "'")
+    .replace(/&#(\d+);/gi, (_m, code) => String.fromCharCode(Number(code)))
+    .replace(/[ \t]+/g, " ")
+    .replace(/\n[ \t]*\n/g, "\n\n")
+    .replace(/^[ \t]+/gm, "")
+    .trim();
+}
+
+async function nativeFetchHtml(url: URL, signal?: AbortSignal): Promise<{ text: string; contentType: string }> {
+  const response = await fetch(url, {
+    headers: {
+      Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+      "User-Agent": "pi-agent-kit/1.0 web-tools native-fetch",
+    },
+    redirect: "follow",
+    signal,
+  });
+
+  if (!response.ok) {
+    throw new Error(`HTTP ${response.status} ${response.statusText}: ${url.toString()}`);
+  }
+
+  const contentType = response.headers.get("content-type") || "";
+  return { text: await response.text(), contentType };
+}
+
+async function fetchWithProvider(
+  url: URL,
+  provider: WebFetchProvider,
+  signal?: AbortSignal,
+): Promise<{ text: string; source: string }> {
+  if (provider === "native") {
+    const { text, contentType } = await nativeFetchHtml(url, signal);
+    const isHtml = contentType.includes("text/html") || contentType.includes("application/xhtml");
+    return { text: isHtml ? stripHtmlToText(text) : text, source: "native" };
+  }
+
+  // Jina provider (default)
+  const jinaUrl = `https://r.jina.ai/${url.toString()}`;
+  const response = await fetch(jinaUrl, {
+    headers: { Accept: "text/markdown" },
+    signal,
+  });
+
+  if (!response.ok) {
+    throw new Error(`Jina fetch failed: ${response.status} ${response.statusText}`);
+  }
+
+  return { text: await response.text(), source: "jina" };
+}
+
+async function resolveSearxApiBase(): Promise<string> {
+  const envBase = process.env.SEARXNG_API_BASE?.trim();
+  if (envBase) return envBase.replace(/\/+$/, "");
+
+  try {
+    const raw = await fs.readFile(SEARXNG_CONFIG_PATH, "utf8");
+    const config = JSON.parse(raw) as { api_base?: string };
+    const configBase = config.api_base?.trim();
+    if (configBase) return configBase.replace(/\/+$/, "");
+  } catch {
+    // ignore missing/unreadable config and fall through to explicit error
+  }
+
+  throw new Error("SEARXNG_API_BASE not set and ~/.config/searxng-search/config.json is missing or invalid");
+}
+
 async function runExaSearch(params: {
   query: string;
   numResults: number;
   searchType: "auto" | "neural" | "fast" | "deep";
   includeDomains?: string[];
   excludeDomains?: string[];
-  signal: AbortSignal;
+  signal?: AbortSignal;
 }): Promise<{ provider: string; results: SearchResult[] }> {
   const apiKey = process.env.EXA_API_KEY;
   if (!apiKey) {
@@ -278,7 +488,7 @@ async function runExaSearch(params: {
 async function runBraveSearch(params: {
   query: string;
   numResults: number;
-  signal: AbortSignal;
+  signal?: AbortSignal;
 }): Promise<{ provider: string; results: SearchResult[] }> {
   const apiKey = process.env.BRAVE_API_KEY;
   if (!apiKey) {
@@ -315,6 +525,48 @@ async function runBraveSearch(params: {
   return { provider: "brave", results };
 }
 
+async function runSearxSearch(params: {
+  query: string;
+  numResults: number;
+  includeDomains?: string[];
+  excludeDomains?: string[];
+  signal?: AbortSignal;
+}): Promise<{ provider: string; results: SearchResult[] }> {
+  const apiBase = await resolveSearxApiBase();
+  const url = new URL(`${apiBase}/search`);
+  url.searchParams.set("q", params.query);
+  url.searchParams.set("format", "json");
+
+  const response = await fetch(url, {
+    headers: {
+      Accept: "application/json",
+      "User-Agent": "web-tools/1.0 searx",
+    },
+    signal: params.signal,
+  });
+
+  if (!response.ok) {
+    throw new Error(`SearXNG error (${response.status}): ${await response.text()}`);
+  }
+
+  const data = (await response.json()) as SearxResponse;
+  let results = (data.results ?? [])
+    .map(normalizeSearxResult)
+    .filter((result): result is SearchResult => result !== null);
+
+  results = dedupeByUrl(results);
+  results = filterByDomains(results, params.includeDomains, params.excludeDomains);
+
+  return { provider: "searx", results: results.slice(0, params.numResults) };
+}
+
+function providerCompletions(prefix: string, providers: WebSearchProvider[]) {
+  const trimmed = prefix.trimStart().toLowerCase();
+  if (!trimmed) return providers.map((value) => ({ value, label: value }));
+  const filtered = providers.filter((value) => value.startsWith(trimmed));
+  return filtered.length > 0 ? filtered.map((value) => ({ value, label: value })) : null;
+}
+
 export default function webToolsExtension(pi: ExtensionAPI) {
   pi.registerTool({
     name: "web_fetch",
@@ -328,6 +580,14 @@ export default function webToolsExtension(pi: ExtensionAPI) {
     ],
     parameters: Type.Object({
       url: Type.String({ description: "The URL to fetch (http/https only)" }),
+      provider: Type.Optional(
+        Type.Union([
+          Type.Literal("jina"),
+          Type.Literal("native"),
+        ], {
+          description: "Fetch backend to use: jina (default, converts to markdown), native (direct fetch with HTML-to-text stripping)",
+        }),
+      ),
       extract: Type.Optional(
         Type.String({
           description: "Optional question or extraction request to answer from the fetched page content",
@@ -350,33 +610,22 @@ export default function webToolsExtension(pi: ExtensionAPI) {
       }
 
       const maxChars = clamp(params.max_chars ?? DEFAULT_FETCH_MAX_CHARS, 1000, MAX_FETCH_MAX_CHARS);
-      const jinaUrl = `https://r.jina.ai/${url.toString()}`;
+      const provider: WebFetchProvider = (params.provider ?? await resolveDefaultFetchProvider(ctx.cwd)) as WebFetchProvider;
 
       try {
-        const response = await fetch(jinaUrl, {
-          headers: { Accept: "text/markdown" },
-          signal,
-        });
-
-        if (!response.ok) {
-          return fail(`Web fetch failed: ${response.status} ${response.statusText}`, {
-            url: url.toString(),
-            status: response.status,
-          });
-        }
-
-        const text = await response.text();
+        const { text, source } = await fetchWithProvider(url, provider, signal);
 
         if (params.extract?.trim()) {
           const answer = await extractFromMarkdown(ctx, url.toString(), text, params.extract.trim(), signal);
           if (answer) {
             return ok([
-              `Fetched: ${url.toString()}`,
+              `Fetched: ${url.toString()} (${source})`,
               `Question: ${params.extract.trim()}`,
               "",
               answer,
             ].join("\n"), {
               url: url.toString(),
+              source,
               extracted: true,
               originalLength: text.length,
             });
@@ -385,7 +634,7 @@ export default function webToolsExtension(pi: ExtensionAPI) {
 
         const truncated = truncate(text, maxChars);
         const lines = [
-          `Fetched: ${url.toString()}`,
+          `Fetched: ${url.toString()} (${source})`,
           `Length: ${text.length} chars${truncated.truncated ? ` (truncated to ${maxChars})` : ""}`,
           params.extract?.trim()
             ? `Extract requested but no model was available, so returning raw content instead.`
@@ -396,6 +645,7 @@ export default function webToolsExtension(pi: ExtensionAPI) {
 
         return ok(lines.join("\n"), {
           url: url.toString(),
+          source,
           originalLength: text.length,
           returnedLength: truncated.text.length,
           truncated: truncated.truncated,
@@ -417,7 +667,7 @@ export default function webToolsExtension(pi: ExtensionAPI) {
     promptSnippet: "Search the web and return structured results with sources.",
     promptGuidelines: [
       "Use web_search when you need to discover sources or find recent/external information.",
-      "Prefer provider='exa' for documentation and semantic research; use provider='brave' for general web search.",
+      "Prefer provider='exa' for documentation and semantic research; use provider='brave' for general web search; use provider='searx' for self-hosted/privacy-oriented search.",
       "Always cite the returned URLs when answering the user.",
     ],
     parameters: Type.Object({
@@ -427,8 +677,9 @@ export default function webToolsExtension(pi: ExtensionAPI) {
           Type.Literal("auto"),
           Type.Literal("exa"),
           Type.Literal("brave"),
+          Type.Literal("searx"),
         ], {
-          description: "Search backend to use: auto (default), exa, or brave",
+          description: "Search backend to use: auto (default), exa, brave, or searx",
         }),
       ),
       include_domains: Type.Optional(
@@ -459,7 +710,7 @@ export default function webToolsExtension(pi: ExtensionAPI) {
         }),
       ),
     }),
-    async execute(_toolCallId, params, signal) {
+    async execute(_toolCallId, params, signal, _onUpdate, ctx) {
       const query = params.query.trim();
       if (!query) {
         return fail("Search query cannot be empty");
@@ -468,7 +719,7 @@ export default function webToolsExtension(pi: ExtensionAPI) {
         return fail("Use either include_domains or exclude_domains, not both in the same request");
       }
 
-      const provider = params.provider ?? "auto";
+      const provider = (params.provider ?? await resolveDefaultProvider(ctx.cwd)) as WebSearchProvider;
       const numResults = clamp(params.num_results ?? DEFAULT_SEARCH_RESULTS, 1, MAX_SEARCH_RESULTS);
       const includeDomains = params.include_domains?.map(normalizeDomain).filter(Boolean);
       const excludeDomains = params.exclude_domains?.map(normalizeDomain).filter(Boolean);
@@ -488,7 +739,17 @@ export default function webToolsExtension(pi: ExtensionAPI) {
         } else if (provider === "brave") {
           searchResponse = await runBraveSearch({ query, numResults, signal });
           searchResponse.results = filterByDomains(searchResponse.results, includeDomains, excludeDomains);
+        } else if (provider === "searx") {
+          searchResponse = await runSearxSearch({
+            query,
+            numResults,
+            includeDomains,
+            excludeDomains,
+            signal,
+          });
         } else {
+          const errors: string[] = [];
+
           try {
             searchResponse = await runExaSearch({
               query,
@@ -499,11 +760,24 @@ export default function webToolsExtension(pi: ExtensionAPI) {
               signal,
             });
           } catch (exaError) {
-            if (!process.env.BRAVE_API_KEY) {
-              throw exaError;
+            errors.push(`exa: ${(exaError as Error).message}`);
+
+            try {
+              searchResponse = await runBraveSearch({ query, numResults, signal });
+              searchResponse.results = filterByDomains(searchResponse.results, includeDomains, excludeDomains);
+            } catch (braveError) {
+              errors.push(`brave: ${(braveError as Error).message}`);
+              searchResponse = await runSearxSearch({
+                query,
+                numResults,
+                includeDomains,
+                excludeDomains,
+                signal,
+              }).catch((searxError) => {
+                errors.push(`searx: ${(searxError as Error).message}`);
+                throw new Error(`All web search providers failed (${errors.join('; ')})`);
+              });
             }
-            searchResponse = await runBraveSearch({ query, numResults, signal });
-            searchResponse.results = filterByDomains(searchResponse.results, includeDomains, excludeDomains);
           }
         }
 
@@ -522,6 +796,7 @@ export default function webToolsExtension(pi: ExtensionAPI) {
           resultCount: results.length,
           includeDomains,
           excludeDomains,
+          configuredDefaultProvider: await resolveDefaultProvider(ctx.cwd),
         });
       } catch (error) {
         if ((error as Error).name === "AbortError") {
@@ -532,6 +807,132 @@ export default function webToolsExtension(pi: ExtensionAPI) {
           provider,
         });
       }
+    },
+  });
+
+  pi.registerCommand("web_search", {
+    description: "Configure the default provider for the web_search tool",
+    getArgumentCompletions: (prefix: string) => {
+      const trimmed = prefix.trimStart();
+      const parts = trimmed.split(/\s+/).filter(Boolean);
+      const endsWithSpace = /\s$/.test(trimmed);
+      const root = ["status", "provider", "clear"];
+      const providers: WebSearchProvider[] = ["auto", "exa", "brave", "searx"];
+
+      if (!trimmed) return root.map((value) => ({ value, label: value }));
+      if (parts.length <= 1 && !endsWithSpace) {
+        const sub = (parts[0] ?? "").toLowerCase();
+        const filtered = root.filter((value) => value.startsWith(sub));
+        return filtered.length > 0 ? filtered.map((value) => ({ value, label: value })) : null;
+      }
+      if ((parts[0] ?? "") === "provider") {
+        const subPrefix = parts.length <= 1 || endsWithSpace ? "" : (parts[parts.length - 1] ?? "");
+        return providerCompletions(subPrefix, providers)?.map((item) => ({ value: `provider ${item.value}`, label: item.label })) ?? null;
+      }
+      return null;
+    },
+    handler: async (args, ctx) => {
+      const trimmed = args.trim();
+      const configPath = resolveWebToolsConfigPath(ctx.cwd);
+      if (!trimmed || trimmed === "status") {
+        const config = await loadWebToolsConfig(ctx.cwd);
+        const provider = config.defaultProvider ?? "auto";
+        ctx.ui.notify([
+          "web_search config",
+          `Default provider: ${provider}`,
+          `Config path: ${configPath}`,
+          `Settings key: ${WEB_TOOLS_SETTINGS_KEY}`,
+        ].join("\n"), "info");
+        return;
+      }
+
+      const [subcommand, ...rest] = trimmed.split(/\s+/);
+      const remainder = rest.join(" ").trim().toLowerCase();
+
+      if (subcommand === "provider") {
+        if (remainder !== "auto" && remainder !== "exa" && remainder !== "brave" && remainder !== "searx") {
+          throw new Error("Usage: /web_search provider <auto|exa|brave|searx>");
+        }
+        await saveWebToolsConfig(ctx.cwd, { defaultProvider: remainder as WebSearchProvider });
+        ctx.ui.notify(`web_search default provider set to ${remainder} in ${configPath}#${WEB_TOOLS_SETTINGS_KEY}`, "info");
+        return;
+      }
+
+      if (subcommand === "clear") {
+        await clearWebToolsConfig(ctx.cwd);
+        ctx.ui.notify(`web_search config cleared from ${configPath} (default provider back to auto)`, "info");
+        return;
+      }
+
+      throw new Error("Usage: /web_search [status|provider <auto|exa|brave|searx>|clear]");
+    },
+  });
+
+  pi.registerCommand("web_fetch", {
+    description: "Configure the default fetch provider for the web_fetch tool",
+    getArgumentCompletions: (prefix: string) => {
+      const trimmed = prefix.trimStart();
+      const parts = trimmed.split(/\s+/).filter(Boolean);
+      const endsWithSpace = /\s$/.test(trimmed);
+      const root = ["status", "provider", "clear"];
+      const fetchProviders: WebFetchProvider[] = ["jina", "native"];
+
+      if (!trimmed) return root.map((value) => ({ value, label: value }));
+      if (parts.length <= 1 && !endsWithSpace) {
+        const sub = (parts[0] ?? "").toLowerCase();
+        const filtered = root.filter((value) => value.startsWith(sub));
+        return filtered.length > 0 ? filtered.map((value) => ({ value, label: value })) : null;
+      }
+      if ((parts[0] ?? "") === "provider") {
+        const subPrefix = parts.length <= 1 || endsWithSpace ? "" : (parts[parts.length - 1] ?? "");
+        const matches = fetchProviders.filter((value) => value.startsWith(subPrefix.toLowerCase()));
+        return matches.length > 0 ? matches.map((value) => ({ value: `provider ${value}`, label: value })) : null;
+      }
+      return null;
+    },
+    handler: async (args, ctx) => {
+      const trimmed = args.trim();
+      const configPath = resolveWebToolsConfigPath(ctx.cwd);
+      if (!trimmed || trimmed === "status") {
+        const config = await loadWebToolsConfig(ctx.cwd);
+        const fetchProvider = config.defaultFetchProvider ?? "jina";
+        const searchProvider = config.defaultProvider ?? "auto";
+        ctx.ui.notify([
+          "web_tools config",
+          `Default web_search provider: ${searchProvider}`,
+          `Default web_fetch provider: ${fetchProvider}`,
+          `Config path: ${configPath}`,
+          `Settings key: ${WEB_TOOLS_SETTINGS_KEY}`,
+        ].join("\n"), "info");
+        return;
+      }
+
+      const [subcommand, ...rest] = trimmed.split(/\s+/);
+      const remainder = rest.join(" ").trim().toLowerCase();
+
+      if (subcommand === "provider") {
+        if (remainder !== "jina" && remainder !== "native") {
+          throw new Error("Usage: /web_fetch provider <jina|native>");
+        }
+        const current = await loadWebToolsConfig(ctx.cwd);
+        await saveWebToolsConfig(ctx.cwd, { ...current, defaultFetchProvider: remainder as WebFetchProvider });
+        ctx.ui.notify(`web_fetch default provider set to ${remainder} in ${configPath}#${WEB_TOOLS_SETTINGS_KEY}`, "info");
+        return;
+      }
+
+      if (subcommand === "clear") {
+        const current = await loadWebToolsConfig(ctx.cwd);
+        delete current.defaultFetchProvider;
+        if (Object.keys(current).length === 0) {
+          await clearWebToolsConfig(ctx.cwd);
+        } else {
+          await saveWebToolsConfig(ctx.cwd, current);
+        }
+        ctx.ui.notify(`web_fetch provider reset to jina (default) in ${configPath}`, "info");
+        return;
+      }
+
+      throw new Error("Usage: /web_fetch [status|provider <jina|native>|clear]");
     },
   });
 }
