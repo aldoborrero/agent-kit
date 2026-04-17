@@ -3,7 +3,6 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { Model, TextContent } from "@mariozechner/pi-ai";
 import { readFileSync } from "node:fs";
-import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import {
   createAgentSession,
@@ -235,16 +234,26 @@ type OracleJsonConfig = {
 
 type OracleModelConfigInfo = {
   value: string;
-  source: "env" | "legacy-env" | "project-json" | "global-json" | "default";
+  source: "env" | "legacy-env" | "project-settings" | "global-settings" | "project-json" | "global-json" | "default";
   path?: string;
   field?: "model" | "defaultModel";
 };
 
+const ORACLE_SETTINGS_KEY = "oracle";
+
 function getGlobalOracleConfigPath(): string {
+  return join(getAgentDir(), "settings.json");
+}
+
+function getLegacyGlobalOracleConfigPath(): string {
   return join(dirname(getAgentDir()), "oracle.json");
 }
 
 function getProjectOracleConfigPath(cwd: string): string {
+  return join(cwd, ".pi", "settings.json");
+}
+
+function getLegacyProjectOracleConfigPath(cwd: string): string {
   return join(cwd, ".pi", "oracle.json");
 }
 
@@ -256,6 +265,25 @@ function readOracleConfigFile(path: string): OracleJsonConfig {
   }
 }
 
+function normalizeOracleConfig(raw: unknown): OracleJsonConfig {
+  if (!raw || typeof raw !== "object") return {};
+  const config = raw as OracleJsonConfig;
+  return {
+    model: typeof config.model === "string" ? config.model : undefined,
+    defaultModel: typeof config.defaultModel === "string" ? config.defaultModel : undefined,
+  };
+}
+
+function readOracleSettings(cwd: string): { project: OracleJsonConfig; global: OracleJsonConfig } {
+  const manager = SettingsManager.create(cwd);
+  const projectSettings = manager.getProjectSettings() as Record<string, unknown>;
+  const globalSettings = manager.getGlobalSettings() as Record<string, unknown>;
+  return {
+    project: normalizeOracleConfig(projectSettings[ORACLE_SETTINGS_KEY]),
+    global: normalizeOracleConfig(globalSettings[ORACLE_SETTINGS_KEY]),
+  };
+}
+
 function getConfiguredModelInfo(cwd: string): OracleModelConfigInfo {
   const envModel = process.env[MODEL_ENV]?.trim();
   if (envModel) return { value: envModel, source: "env" };
@@ -263,7 +291,21 @@ function getConfiguredModelInfo(cwd: string): OracleModelConfigInfo {
   const legacyEnvModel = process.env[LEGACY_MODEL_ENV]?.trim();
   if (legacyEnvModel) return { value: legacyEnvModel, source: "legacy-env" };
 
-  const projectPath = getProjectOracleConfigPath(cwd);
+  const settingsConfig = readOracleSettings(cwd);
+  if (settingsConfig.project.model?.trim()) {
+    return { value: settingsConfig.project.model.trim(), source: "project-settings", path: getProjectOracleConfigPath(cwd), field: "model" };
+  }
+  if (settingsConfig.project.defaultModel?.trim()) {
+    return { value: settingsConfig.project.defaultModel.trim(), source: "project-settings", path: getProjectOracleConfigPath(cwd), field: "defaultModel" };
+  }
+  if (settingsConfig.global.model?.trim()) {
+    return { value: settingsConfig.global.model.trim(), source: "global-settings", path: getGlobalOracleConfigPath(), field: "model" };
+  }
+  if (settingsConfig.global.defaultModel?.trim()) {
+    return { value: settingsConfig.global.defaultModel.trim(), source: "global-settings", path: getGlobalOracleConfigPath(), field: "defaultModel" };
+  }
+
+  const projectPath = getLegacyProjectOracleConfigPath(cwd);
   const projectConfig = readOracleConfigFile(projectPath);
   if (projectConfig.model?.trim()) {
     return { value: projectConfig.model.trim(), source: "project-json", path: projectPath, field: "model" };
@@ -272,7 +314,7 @@ function getConfiguredModelInfo(cwd: string): OracleModelConfigInfo {
     return { value: projectConfig.defaultModel.trim(), source: "project-json", path: projectPath, field: "defaultModel" };
   }
 
-  const globalPath = getGlobalOracleConfigPath();
+  const globalPath = getLegacyGlobalOracleConfigPath();
   const globalConfig = readOracleConfigFile(globalPath);
   if (globalConfig.model?.trim()) {
     return { value: globalConfig.model.trim(), source: "global-json", path: globalPath, field: "model" };
@@ -289,17 +331,27 @@ function getConfiguredModelName(cwd: string): string {
 }
 
 async function writeProjectOracleModelConfig(cwd: string, model: string | null): Promise<void> {
-  const path = getProjectOracleConfigPath(cwd);
-  const dir = dirname(path);
-  const existing = readOracleConfigFile(path);
+  const manager = SettingsManager.create(cwd);
+  await manager.reload();
+  const projectSettings = manager.getProjectSettings() as Record<string, unknown>;
+  const existing = normalizeOracleConfig(projectSettings[ORACLE_SETTINGS_KEY]);
+
   if (model && model !== DEFAULT_SUGGESTION_MODEL) {
     existing.model = model;
-  } else {
-    delete existing.model;
     delete existing.defaultModel;
+    projectSettings[ORACLE_SETTINGS_KEY] = existing;
+  } else {
+    delete projectSettings[ORACLE_SETTINGS_KEY];
   }
-  await mkdir(dir, { recursive: true });
-  await writeFile(path, `${JSON.stringify(existing, null, 2)}\n`, "utf8");
+
+  const internal = manager as unknown as {
+    modifiedProjectFields: Set<string>;
+    saveProjectSettings: (settings: Record<string, unknown>) => void;
+    flush: () => Promise<void>;
+  };
+  internal.modifiedProjectFields.add(ORACLE_SETTINGS_KEY);
+  internal.saveProjectSettings(projectSettings);
+  await internal.flush();
 }
 
 async function showOracleModelSelector(ctx: ExtensionContext): Promise<string | null> {
@@ -970,7 +1022,7 @@ export default function oracleExtension(pi: ExtensionAPI): void {
           return;
         }
         await writeProjectOracleModelConfig(ctx.cwd, selected);
-        ctx.ui.notify(`Oracle model set to ${selected} (${getProjectOracleConfigPath(ctx.cwd)})`, "info");
+        ctx.ui.notify(`Oracle model set to ${selected} (${getProjectOracleConfigPath(ctx.cwd)}#${ORACLE_SETTINGS_KEY})`, "info");
         return;
       }
 
@@ -983,7 +1035,7 @@ export default function oracleExtension(pi: ExtensionAPI): void {
             `Path: ${configured.path ?? "none"}`,
             `Field: ${configured.field ?? "none"}`,
             configured.source === "env" || configured.source === "legacy-env"
-              ? `Note: environment variables override JSON config`
+              ? `Note: environment variables override settings and legacy JSON config`
               : `Use /oracle model, /oracle model <provider/model-id>, /oracle model current, or /oracle model clear`,
           ].join("\n"),
           "info",
@@ -993,7 +1045,7 @@ export default function oracleExtension(pi: ExtensionAPI): void {
 
       if (sub === "model clear") {
         await writeProjectOracleModelConfig(ctx.cwd, null);
-        ctx.ui.notify(`Cleared project oracle model override (${getProjectOracleConfigPath(ctx.cwd)})`, "info");
+        ctx.ui.notify(`Cleared project oracle model override (${getProjectOracleConfigPath(ctx.cwd)}#${ORACLE_SETTINGS_KEY})`, "info");
         return;
       }
 
@@ -1003,7 +1055,7 @@ export default function oracleExtension(pi: ExtensionAPI): void {
         const detail = configured.source === "default"
           ? "Oracle will use the current session model by default"
           : `Project override cleared; effective source is now ${configured.source} (${configured.value})`;
-        ctx.ui.notify(`${detail}\nConfig: ${getProjectOracleConfigPath(ctx.cwd)}`, "info");
+        ctx.ui.notify(`${detail}\nConfig: ${getProjectOracleConfigPath(ctx.cwd)}#${ORACLE_SETTINGS_KEY}`, "info");
         return;
       }
 
@@ -1025,7 +1077,7 @@ export default function oracleExtension(pi: ExtensionAPI): void {
           return;
         }
         await writeProjectOracleModelConfig(ctx.cwd, `${model.provider}/${model.id}`);
-        ctx.ui.notify(`Oracle model set to ${model.provider}/${model.id} (${getProjectOracleConfigPath(ctx.cwd)})`, "info");
+        ctx.ui.notify(`Oracle model set to ${model.provider}/${model.id} (${getProjectOracleConfigPath(ctx.cwd)}#${ORACLE_SETTINGS_KEY})`, "info");
         return;
       }
 

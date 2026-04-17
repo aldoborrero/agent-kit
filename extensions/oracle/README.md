@@ -32,22 +32,24 @@ Generates a short “likely next user prompt” after each completed agent run a
 
 ## Model selection
 
-Oracle model selection can be configured via JSON or environment variables.
+Oracle model selection can be configured via project/global settings or environment variables.
 
-Typed command selection and TUI selection write project-local config to `<cwd>/.pi/oracle.json`.
+Typed command selection and TUI selection write project-local config to `<cwd>/.pi/settings.json` under the `oracle` key.
 
-## JSON configuration
+## Settings configuration
 
-Supported files (project overrides global):
+Supported settings files (project overrides global):
 
-- `~/.pi/oracle.json`
-- `<cwd>/.pi/oracle.json`
+- `~/.pi/agent/settings.json`
+- `<cwd>/.pi/settings.json`
 
 Example:
 
 ```json
 {
-  "model": "provider/model-id"
+  "oracle": {
+    "model": "provider/model-id"
+  }
 }
 ```
 
@@ -55,9 +57,16 @@ Also accepted:
 
 ```json
 {
-  "defaultModel": "provider/model-id"
+  "oracle": {
+    "defaultModel": "provider/model-id"
+  }
 }
 ```
+
+Legacy compatibility is still kept for the old sidecar files:
+
+- `~/.pi/oracle.json`
+- `<cwd>/.pi/oracle.json`
 
 ## Environment variables
 
@@ -81,7 +90,8 @@ current
 
 Meaning:
 - first try the environment variable if set
-- otherwise use JSON config (`<cwd>/.pi/oracle.json` overrides `~/.pi/oracle.json`)
+- otherwise use settings config (`<cwd>/.pi/settings.json` overrides `~/.pi/agent/settings.json`)
+- then fall back to legacy sidecar JSON config if present (`<cwd>/.pi/oracle.json` overrides `~/.pi/oracle.json`)
 - otherwise try the current session model
 - if the configured model is unavailable, fall back to the current session model (if usable), then to the first available model
 
