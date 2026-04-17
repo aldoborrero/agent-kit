@@ -8,10 +8,11 @@
  * bubblewrap on Linux).
  *
  * Config files (merged, project takes precedence):
- * - ~/.pi/agent/sandbox.json (global)
- * - <cwd>/.pi/sandbox.json (project-local)
+ * - ~/.pi/agent/settings.json under key "sandbox" (global)
+ * - <cwd>/.pi/settings.json under key "sandbox" (project-local)
+ * - legacy fallback: ~/.pi/agent/sandbox.json and <cwd>/.pi/sandbox.json
  *
- * Example .pi/sandbox.json:
+ * Example .pi/settings.json:
  * ```json
  * {
  *   "enabled": true,
@@ -43,7 +44,7 @@ import { spawn } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { SandboxManager, type SandboxRuntimeConfig } from "@anthropic-ai/sandbox-runtime";
-import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
+import { SettingsManager, type ExtensionAPI, type ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { type BashOperations, createBashTool, getAgentDir } from "@mariozechner/pi-coding-agent";
 import { registerFancyFooterWidget, refreshFancyFooter } from "../_shared/fancy-footer.js";
 import { createUiColors } from "../_shared/ui-colors.js";
@@ -76,27 +77,43 @@ const DEFAULT_CONFIG: SandboxConfig = {
 	},
 };
 
+function normalizeConfig(raw: unknown): Partial<SandboxConfig> {
+	if (!raw || typeof raw !== "object") return {};
+	return raw as Partial<SandboxConfig>;
+}
+
+function readLegacyConfig(path: string): Partial<SandboxConfig> {
+	if (!existsSync(path)) return {};
+	try {
+		return normalizeConfig(JSON.parse(readFileSync(path, "utf-8")));
+	} catch (e) {
+		console.error(`Warning: Could not parse ${path}: ${e}`);
+		return {};
+	}
+}
+
 function loadConfig(cwd: string): SandboxConfig {
 	const projectConfigPath = join(cwd, ".pi", "sandbox.json");
-	const globalConfigPath = join(getAgentDir(), "extensions", "sandbox.json");
+	const globalConfigPath = join(getAgentDir(), "sandbox.json");
 
 	let globalConfig: Partial<SandboxConfig> = {};
 	let projectConfig: Partial<SandboxConfig> = {};
 
-	if (existsSync(globalConfigPath)) {
-		try {
-			globalConfig = JSON.parse(readFileSync(globalConfigPath, "utf-8"));
-		} catch (e) {
-			console.error(`Warning: Could not parse ${globalConfigPath}: ${e}`);
-		}
+	try {
+		const manager = SettingsManager.create(cwd);
+		const globalSettings = manager.getGlobalSettings() as Record<string, unknown>;
+		const projectSettings = manager.getProjectSettings() as Record<string, unknown>;
+		globalConfig = normalizeConfig(globalSettings.sandbox);
+		projectConfig = normalizeConfig(projectSettings.sandbox);
+	} catch {
+		// fall through to legacy files only
 	}
 
-	if (existsSync(projectConfigPath)) {
-		try {
-			projectConfig = JSON.parse(readFileSync(projectConfigPath, "utf-8"));
-		} catch (e) {
-			console.error(`Warning: Could not parse ${projectConfigPath}: ${e}`);
-		}
+	if (Object.keys(globalConfig).length === 0) {
+		globalConfig = readLegacyConfig(globalConfigPath);
+	}
+	if (Object.keys(projectConfig).length === 0) {
+		projectConfig = readLegacyConfig(projectConfigPath);
 	}
 
 	return deepMerge(deepMerge(DEFAULT_CONFIG, globalConfig), projectConfig);

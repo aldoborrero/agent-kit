@@ -2,7 +2,7 @@
 
 OS-level sandboxing for bash commands using a sandbox runtime library. Enforces filesystem and network restrictions at the OS level (sandbox-exec on macOS, bubblewrap on Linux).
 
-**Disabled by default.** Enable with `/sandbox on` or set `"enabled": true` in config.
+**Disabled by default.** Enable with `/sandbox on` or set `"sandbox.enabled": true` in settings.
 
 ## Commands
 
@@ -15,25 +15,31 @@ OS-level sandboxing for bash commands using a sandbox runtime library. Enforces 
 ## Configuration
 
 Configs are merged (project overrides global):
-- `~/.pi/agent/sandbox.json` (global)
-- `<cwd>/.pi/sandbox.json` (project-local)
+- `~/.pi/agent/settings.json` under `sandbox` (global)
+- `<cwd>/.pi/settings.json` under `sandbox` (project-local)
 
 ```json
 {
-  "enabled": true,
-  "network": {
-    "allowedDomains": ["github.com", "*.github.com", "registry.npmjs.org"],
-    "deniedDomains": []
-  },
-  "filesystem": {
-    "denyRead": ["~/.ssh", "~/.aws", "~/.gnupg"],
-    "allowWrite": [".", "/tmp"],
-    "denyWrite": [".env", ".env.*", "*.pem", "*.key"]
+  "sandbox": {
+    "enabled": true,
+    "network": {
+      "allowedDomains": ["github.com", "*.github.com", "registry.npmjs.org"],
+      "deniedDomains": []
+    },
+    "filesystem": {
+      "denyRead": ["~/.ssh", "~/.aws", "~/.gnupg"],
+      "allowWrite": [".", "/tmp"],
+      "denyWrite": [".env", ".env.*", "*.pem", "*.key"]
+    }
   }
 }
 ```
 
-Set `"enabled": true` in config to auto-enable on session start.
+Legacy compatibility is still kept for:
+- `~/.pi/agent/sandbox.json`
+- `<cwd>/.pi/sandbox.json`
+
+Set `"sandbox.enabled": true` in settings to auto-enable on session start.
 
 ## Flags
 
