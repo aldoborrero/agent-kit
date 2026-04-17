@@ -73,24 +73,43 @@ Streaming uses battle-tested throttling constants from [nullclaw](https://github
 
 When the draft buffer exceeds 3000 bytes, a **progress preview** is shown instead of truncating: elapsed time, total size, and the last N bytes of the buffer. On `429` rate-limit responses, flushes are suppressed for the `retry_after` duration. On `TEXTDRAFT_PEER_INVALID` responses (e.g. group chats), drafts are disabled for the rest of the run.
 
-## Config (`~/.pi/walkie.json`)
+## Config (`settings.json`)
+
+Global config is stored in `~/.pi/agent/settings.json` under `walkie`.
+Project-local overrides are stored in `<cwd>/.pi/settings.json` under `walkie`.
+
+Example global config:
 
 ```json
 {
-  "botToken": "123456:ABC-DEF...",
-  "chatId": 987654321,
-  "allowedUserId": 987654321,
-  "enabled": true,
-  "streaming": true
+  "walkie": {
+    "botToken": "123456:ABC-DEF...",
+    "chatId": 987654321,
+    "allowedUserId": 987654321,
+    "enabled": true,
+    "streaming": true
+  }
+}
+```
+
+Example project-local override:
+
+```json
+{
+  "walkie": {
+    "topicId": 123,
+    "topicName": "pi-agent-kit"
+  }
 }
 ```
 
 Config is written automatically by `/walkie setup`. You can also edit it manually.
+Legacy compatibility is still kept for `~/.pi/walkie.json` and `<cwd>/.pi/walkie.json`.
 
 ## Security
 
 - Only messages from `allowedUserId` are processed. All others are silently dropped.
-- The bot token is stored in `~/.pi/walkie.json` (mode 600 recommended).
+- The bot token is stored in `~/.pi/agent/settings.json` under `walkie` (mode 600 recommended for the file).
 - The polling loop only accepts `message` and `callback_query` update types.
 - `/abort` sends a steering message and calls `ctx.abort()` — it cannot be triggered by any other Telegram user.
 

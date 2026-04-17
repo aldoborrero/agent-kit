@@ -30,12 +30,10 @@
  *   /new      — queue new session
  */
 
-import { mkdir, writeFile } from "node:fs/promises";
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
-import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
-import { getAgentDir } from "@mariozechner/pi-coding-agent";
+import { SettingsManager, type ExtensionAPI, type ExtensionContext, getAgentDir } from "@mariozechner/pi-coding-agent";
 import { createUiColors } from "../_shared/ui-colors.js";
 import * as tg from "./telegram.js";
 import { MessageQueue } from "./queue.js";
@@ -64,6 +62,7 @@ const PI_DIR = dirname(getAgentDir());
 const PI_DIR_NAME = PI_DIR.replace(homedir() + "/", ""); // e.g. ".pi"
 
 const CONFIG_PATH = join(PI_DIR, "walkie.json");
+const WALKIE_SETTINGS_KEY = "walkie";
 
 interface WalkieConfig {
   botToken: string;
@@ -80,49 +79,90 @@ interface WalkieConfig {
   topicName?: string;
 }
 
-function loadConfigSync(): Partial<WalkieConfig> {
+function normalizeWalkieConfig(raw: unknown): Partial<WalkieConfig> {
+  if (!raw || typeof raw !== "object") return {};
+  return raw as Partial<WalkieConfig>;
+}
+
+function loadLegacyConfigSync(): Partial<WalkieConfig> {
   try {
-    return JSON.parse(readFileSync(CONFIG_PATH, "utf8")) as Partial<WalkieConfig>;
+    return normalizeWalkieConfig(JSON.parse(readFileSync(CONFIG_PATH, "utf8")));
   } catch {
     return {};
   }
 }
 
-/** Load project-local overrides from <cwd>/.pi/walkie.json */
+function loadConfigSync(cwd: string = process.cwd()): Partial<WalkieConfig> {
+  try {
+    const manager = SettingsManager.create(cwd);
+    const globalSettings = manager.getGlobalSettings() as Record<string, unknown>;
+    return { ...loadLegacyConfigSync(), ...normalizeWalkieConfig(globalSettings[WALKIE_SETTINGS_KEY]) };
+  } catch {
+    return loadLegacyConfigSync();
+  }
+}
+
+/** Load project-local overrides from <cwd>/.pi/settings.json, with legacy fallback to <cwd>/.pi/walkie.json */
 function loadProjectConfigSync(cwd: string): Partial<WalkieConfig> {
   try {
+    const manager = SettingsManager.create(cwd);
+    const projectSettings = manager.getProjectSettings() as Record<string, unknown>;
+    const settingsConfig = normalizeWalkieConfig(projectSettings[WALKIE_SETTINGS_KEY]);
+    if (Object.keys(settingsConfig).length > 0) return settingsConfig;
+  } catch {
+    // fall back to legacy sidecar
+  }
+  try {
     const path = join(cwd, PI_DIR_NAME, "walkie.json");
-    return JSON.parse(readFileSync(path, "utf8")) as Partial<WalkieConfig>;
+    return normalizeWalkieConfig(JSON.parse(readFileSync(path, "utf8")));
   } catch {
     return {};
   }
 }
 
 /**
- * Persist global config to ~/.pi/walkie.json.
+ * Persist global config to ~/.pi/agent/settings.json under the walkie key.
  * topicId and topicName are project-specific — use persistProjectConfig() for those.
  */
 async function persistConfig(config: Partial<WalkieConfig>): Promise<void> {
   const { topicId, topicName, ...globalFields } = config;
   try {
-    await mkdir(PI_DIR, { recursive: true });
-    await writeFile(CONFIG_PATH, JSON.stringify(globalFields, null, 2) + "\n", "utf8");
+    const manager = SettingsManager.create(process.cwd());
+    await manager.reload();
+    const globalSettings = manager.getGlobalSettings() as Record<string, unknown>;
+    globalSettings[WALKIE_SETTINGS_KEY] = globalFields;
+    const internal = manager as unknown as {
+      globalSettings: Record<string, unknown>;
+      modifiedFields: Set<string>;
+      save: () => void;
+      flush: () => Promise<void>;
+    };
+    internal.globalSettings = globalSettings;
+    internal.modifiedFields.add(WALKIE_SETTINGS_KEY);
+    internal.save();
+    await internal.flush();
   } catch {
     // non-critical
   }
 }
 
-/** Persist project-local overrides (topicId, topicName) to <cwd>/.pi/walkie.json */
+/** Persist project-local overrides (topicId, topicName) to <cwd>/.pi/settings.json under walkie */
 async function persistProjectConfig(cwd: string, partial: Pick<Partial<WalkieConfig>, "topicId" | "topicName">): Promise<void> {
   try {
-    const dir = join(cwd, PI_DIR_NAME);
-    const path = join(dir, "walkie.json");
-    await mkdir(dir, { recursive: true });
-    // Merge with existing project config to avoid clobbering other fields
-    let existing: Partial<WalkieConfig> = {};
-    try { existing = JSON.parse(readFileSync(path, "utf8")) as Partial<WalkieConfig>; } catch { /* ok */ }
+    const manager = SettingsManager.create(cwd);
+    await manager.reload();
+    const projectSettings = manager.getProjectSettings() as Record<string, unknown>;
+    const existing = normalizeWalkieConfig(projectSettings[WALKIE_SETTINGS_KEY]);
     const merged = { ...existing, ...partial };
-    await writeFile(path, JSON.stringify(merged, null, 2) + "\n", "utf8");
+    projectSettings[WALKIE_SETTINGS_KEY] = merged;
+    const internal = manager as unknown as {
+      modifiedProjectFields: Set<string>;
+      saveProjectSettings: (settings: Record<string, unknown>) => void;
+      flush: () => Promise<void>;
+    };
+    internal.modifiedProjectFields.add(WALKIE_SETTINGS_KEY);
+    internal.saveProjectSettings(projectSettings);
+    await internal.flush();
   } catch {
     // non-critical
   }
@@ -137,7 +177,19 @@ interface VoiceConfig {
   lang?: string;
 }
 
-function loadVoiceConfigSync(): VoiceConfig {
+function loadVoiceConfigSync(cwd: string = process.cwd()): VoiceConfig {
+  try {
+    const manager = SettingsManager.create(cwd);
+    const globalSettings = manager.getGlobalSettings() as Record<string, unknown>;
+    const projectSettings = manager.getProjectSettings() as Record<string, unknown>;
+    const merged = {
+      ...(globalSettings.voice as VoiceConfig | undefined),
+      ...(projectSettings.voice as VoiceConfig | undefined),
+    };
+    if (merged && (merged.provider || merged.lang)) return merged;
+  } catch {
+    // fall back to legacy sidecar
+  }
   try {
     return JSON.parse(readFileSync(VOICE_CONFIG_PATH, "utf8")) as VoiceConfig;
   } catch {
@@ -434,7 +486,7 @@ export default function walkieExtension(pi: ExtensionAPI) {
 
   async function reloadConfigForCwd(ctx: ExtensionContext): Promise<void> {
     config = { enabled: true, streaming: true, ...loadConfigSync(), ...loadProjectConfigSync(ctx.cwd) };
-    cachedVoiceConfig = loadVoiceConfigSync();
+    cachedVoiceConfig = loadVoiceConfigSync(ctx.cwd);
     updateStatus(ctx);
 
     if (isConfigured(config)) {
@@ -942,7 +994,7 @@ export default function walkieExtension(pi: ExtensionAPI) {
   pi.on("session_start", async (_event, ctx) => {
     lastCtx = ctx;
     // Merge: global defaults ← global config ← project-local overrides
-    // Project-local (~/<cwd>/.pi/walkie.json) holds topicId/topicName so each
+    // Project-local settings hold topicId/topicName so each
     // pi instance in a different project has its own topic without collision.
     await reloadConfigForCwd(ctx);
 
@@ -1303,6 +1355,8 @@ export default function walkieExtension(pi: ExtensionAPI) {
             `Stream  : ${config.streaming ? "yes" : "no"}`,
             `Polling : ${pollingAbort ? "active" : "stopped"}`,
             `Agent   : ${isStreaming ? "running" : "idle"}`,
+            `Global  : ${join(getAgentDir(), "settings.json")}#${WALKIE_SETTINGS_KEY}`,
+            `Project : ${join(ctx.cwd, ".pi", "settings.json")}#${WALKIE_SETTINGS_KEY}`,
           ];
           ctx.ui.notify(lines.join("\n"), "info");
           break;
