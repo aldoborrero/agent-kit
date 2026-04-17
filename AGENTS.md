@@ -40,6 +40,7 @@ direnv allow
 | `TOGETHER_API_KEY` | together-provider | Together AI API key |
 | `BRAVE_API_KEY` | brave-search, web-tools | Brave Search API key |
 | `EXA_API_KEY` | exa-search, web-tools | Exa Search API key |
+| `SEARXNG_API_BASE` | web-tools, searxng-search | Base URL for a SearXNG instance with JSON enabled |
 | `PI_ORACLE_MODEL` | oracle | Override oracle suggestion model (e.g. `groq/openai/gpt-oss-20b`) |
 | `VOICE_LANG` | voice | Transcription language (default: `en`) |
 | `VOICE_MODE` | voice | Output mode: `paste` or `send` |
@@ -75,7 +76,7 @@ direnv allow
 
 | Tool | Extension | Description |
 |------|-----------|-------------|
-| `web_search` | web-tools | **Preferred** high-level web search (uses Exa + Brave backends) |
+| `web_search` | web-tools | **Preferred** high-level web search (uses Exa, Brave, and SearXNG backends) |
 | `web_fetch` | web-tools | **Preferred** high-level page fetcher with markdown output |
 | `ast_grep` | ast-grep | Structural code search via AST patterns |
 | `github_search_code` | github-search | Search code on GitHub |

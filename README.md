@@ -78,7 +78,7 @@ TypeScript extensions for [pi-coding-agent](https://github.com/badlogic/pi-mono)
 
 | Extension | Description |
 |-----------|-------------|
-| `web-tools` | High-level `web_search` and `web_fetch` tools — preferred interface for web search, webpage fetching, and source gathering |
+| `web-tools` | High-level `web_search` and `web_fetch` tools — preferred interface for web search, webpage fetching, and source gathering (Exa, Brave, SearXNG) |
 | [`github-search`](extensions/github-search/README.md) | Search code, issues, and PRs on GitHub via `gh` CLI |
 | [`exa-search`](extensions/exa-search/README.md) | Backend-specific Exa search integration used by higher-level web tooling |
 | [`brave-search`](extensions/brave-search/README.md) | Backend-specific Brave search integration used by higher-level web tooling |
