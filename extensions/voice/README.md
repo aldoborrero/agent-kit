@@ -51,7 +51,20 @@ Example: [nvrxq/claude-code-voice](https://github.com/nvrxq/claude-code-voice) (
 
 ## Configuration
 
-Settings are persisted to `~/.pi/voice.json` and restored on every session start. Changes made via `/voice config` or the inline subcommands are saved automatically.
+Settings are persisted to `~/.pi/agent/settings.json` under the `voice` key and restored on every session start. Changes made via `/voice config` or the inline subcommands are saved automatically.
+
+Example:
+
+```json
+{
+  "voice": {
+    "provider": "groq",
+    "lang": "en",
+    "mode": "paste",
+    "shortcut": "ctrl+alt+v"
+  }
+}
+```
 
 Persisted config takes priority over env vars.
 
@@ -63,7 +76,8 @@ Persisted config takes priority over env vars.
 | `VOICE_LANG` | `en` | Transcription language (env var fallback) |
 | `VOICE_MODE` | `paste` | Output mode (env var fallback) |
 
-The `shortcut` field in `~/.pi/voice.json` persists the configured key. Changes require `/reload` or a pi restart.
+The `voice.shortcut` field in `~/.pi/agent/settings.json` persists the configured key. Changes require `/reload` or a pi restart.
+Legacy compatibility is still kept for the old `~/.pi/voice.json` sidecar file.
 
 ## System Dependencies
 
@@ -84,7 +98,7 @@ Not needed when using the daemon provider (daemon handles audio capture).
 
 ## Features
 
-- **Persistent config** — provider, language, and mode saved to `~/.pi/voice.json`
+- **Persistent config** — provider, language, and mode saved to `~/.pi/agent/settings.json` under `voice`
 - **Interactive settings** — `/voice config` opens a navigable settings panel
 - **Tab completion** — `/voice [tab]` shows available subcommands
 - Auto-stop on 2 seconds of silence

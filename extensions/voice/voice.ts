@@ -14,15 +14,13 @@
  *   /voice mode <paste|send>
  *   /voice status     — show current configuration
  *
- * Config is persisted to ~/.pi/voice.json between sessions.
+ * Config is persisted to ~/.pi/agent/settings.json under the voice key.
  */
 
 import { readFileSync } from "node:fs";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
-import { DynamicBorder, getSettingsListTheme } from "@mariozechner/pi-coding-agent";
+import { DynamicBorder, SettingsManager, getAgentDir, getSettingsListTheme, type ExtensionAPI, type ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { registerFancyFooterWidget, refreshFancyFooter } from "../_shared/fancy-footer.js";
 import { createUiColors } from "../_shared/ui-colors.js";
 import { Container, type SettingItem, SettingsList, Text } from "@mariozechner/pi-tui";
@@ -35,7 +33,8 @@ const LEVEL_BARS = "▁▃▅▇";
 const LEVEL_METER_INTERVAL_MS = 100;
 const MIN_AUDIO_LENGTH = 16000;
 
-const CONFIG_FILE = join(homedir(), ".pi", "voice.json");
+const LEGACY_CONFIG_FILE = join(homedir(), ".pi", "voice.json");
+const VOICE_SETTINGS_KEY = "voice";
 
 const PROVIDER_VALUES = ["auto", "groq", "openai", "daemon"] as const;
 const LANG_VALUES = ["en", "fr", "de", "es", "it", "pt", "zh", "ja", "ko", "ru", "ar"] as const;
@@ -52,30 +51,67 @@ interface SavedConfig {
 
 const DEFAULT_SHORTCUT = "ctrl+alt+v";
 
-function loadSavedConfigSync(): Partial<SavedConfig> {
+function getSettingsPath(): string {
+	return join(getAgentDir(), "settings.json");
+}
+
+function normalizeSavedConfig(raw: unknown): Partial<SavedConfig> {
+	if (!raw || typeof raw !== "object") return {};
+	const config = raw as Partial<SavedConfig>;
+	const normalized: Partial<SavedConfig> = {};
+	if (config.provider === "auto" || config.provider === "groq" || config.provider === "openai" || config.provider === "daemon") {
+		normalized.provider = config.provider;
+	}
+	if (typeof config.lang === "string" && config.lang.trim()) normalized.lang = config.lang.trim();
+	if (config.mode === "paste" || config.mode === "send") normalized.mode = config.mode;
+	if (typeof config.shortcut === "string" && config.shortcut.trim()) normalized.shortcut = config.shortcut.trim();
+	return normalized;
+}
+
+function readLegacySavedConfigSync(): Partial<SavedConfig> {
 	try {
-		const raw = readFileSync(CONFIG_FILE, "utf8");
-		return JSON.parse(raw) as Partial<SavedConfig>;
+		const raw = readFileSync(LEGACY_CONFIG_FILE, "utf8");
+		return normalizeSavedConfig(JSON.parse(raw));
 	} catch {
 		return {};
 	}
 }
 
-async function loadSavedConfig(): Promise<Partial<SavedConfig>> {
+function loadSavedConfigSync(cwd: string = process.cwd()): Partial<SavedConfig> {
 	try {
-		const raw = await readFile(CONFIG_FILE, "utf8");
-		return JSON.parse(raw) as Partial<SavedConfig>;
+		const manager = SettingsManager.create(cwd);
+		const projectSettings = manager.getProjectSettings() as Record<string, unknown>;
+		const globalSettings = manager.getGlobalSettings() as Record<string, unknown>;
+		const projectConfig = normalizeSavedConfig(projectSettings[VOICE_SETTINGS_KEY]);
+		const globalConfig = normalizeSavedConfig(globalSettings[VOICE_SETTINGS_KEY]);
+		return { ...readLegacySavedConfigSync(), ...globalConfig, ...projectConfig };
 	} catch {
-		return {};
+		return readLegacySavedConfigSync();
 	}
 }
 
-async function persistConfig(lang: string, mode: "paste" | "send", provider: ProviderName | null, shortcut: string): Promise<void> {
+async function loadSavedConfig(cwd: string = process.cwd()): Promise<Partial<SavedConfig>> {
+	return loadSavedConfigSync(cwd);
+}
+
+async function persistConfig(cwd: string, lang: string, mode: "paste" | "send", provider: ProviderName | null, shortcut: string): Promise<void> {
 	try {
+		const manager = SettingsManager.create(cwd);
+		await manager.reload();
+		const globalSettings = manager.getGlobalSettings() as Record<string, unknown>;
 		const saved: SavedConfig = { lang, mode, shortcut };
 		if (provider) saved.provider = provider;
-		await mkdir(join(homedir(), ".pi"), { recursive: true });
-		await writeFile(CONFIG_FILE, JSON.stringify(saved, null, 2), "utf8");
+		globalSettings[VOICE_SETTINGS_KEY] = saved;
+		const internal = manager as unknown as {
+			globalSettings: Record<string, unknown>;
+			modifiedFields: Set<string>;
+			save: () => void;
+			flush: () => Promise<void>;
+		};
+		internal.globalSettings = globalSettings;
+		internal.modifiedFields.add(VOICE_SETTINGS_KEY);
+		internal.save();
+		await internal.flush();
 	} catch {
 		// Non-critical
 	}
@@ -108,7 +144,7 @@ export default function voiceExtension(pi: ExtensionAPI) {
 	});
 
 	// Read shortcut synchronously — registerShortcut runs at load time
-	const initConfig = loadSavedConfigSync();
+	const initConfig = loadSavedConfigSync(process.cwd());
 	const activeShortcut = initConfig.shortcut ?? DEFAULT_SHORTCUT;
 
 	const config = {
@@ -411,7 +447,7 @@ export default function voiceExtension(pi: ExtensionAPI) {
 									config.mode = newValue as "paste" | "send";
 								}
 								updateStatus(ctx);
-								persistConfig(config.lang, config.mode, providerName, config.shortcut).catch(() => {});
+								persistConfig(ctx.cwd, config.lang, config.mode, providerName, config.shortcut).catch(() => {});
 							},
 							() => done(undefined),
 						);
@@ -440,12 +476,12 @@ export default function voiceExtension(pi: ExtensionAPI) {
 					if (name === "auto") {
 						initProvider();
 						updateStatus(ctx);
-						await persistConfig(config.lang, config.mode, providerName, config.shortcut);
+						await persistConfig(ctx.cwd, config.lang, config.mode, providerName, config.shortcut);
 						if (ctx.hasUI) ctx.ui.notify(`Voice provider: auto-detect → ${providerName ?? "none"}`, "info");
 					} else if (name === "groq" || name === "openai" || name === "daemon") {
 						initProvider(name);
 						updateStatus(ctx);
-						await persistConfig(config.lang, config.mode, providerName, config.shortcut);
+						await persistConfig(ctx.cwd, config.lang, config.mode, providerName, config.shortcut);
 						if (ctx.hasUI) ctx.ui.notify(`Voice provider: ${name}`, "info");
 					} else {
 						if (ctx.hasUI) ctx.ui.notify("Usage: /voice provider <auto|groq|openai|daemon>", "error");
@@ -457,7 +493,7 @@ export default function voiceExtension(pi: ExtensionAPI) {
 					const code = parts[1];
 					if (code) {
 						config.lang = code;
-						await persistConfig(config.lang, config.mode, providerName, config.shortcut);
+						await persistConfig(ctx.cwd, config.lang, config.mode, providerName, config.shortcut);
 						if (ctx.hasUI) ctx.ui.notify(`Voice language: ${code}`, "info");
 					} else {
 						if (ctx.hasUI) ctx.ui.notify(`Voice language: ${config.lang}`, "info");
@@ -469,7 +505,7 @@ export default function voiceExtension(pi: ExtensionAPI) {
 					const mode = parts[1]?.toLowerCase();
 					if (mode === "paste" || mode === "send") {
 						config.mode = mode;
-						await persistConfig(config.lang, config.mode, providerName, config.shortcut);
+						await persistConfig(ctx.cwd, config.lang, config.mode, providerName, config.shortcut);
 						if (ctx.hasUI) ctx.ui.notify(`Voice mode: ${mode}`, "info");
 					} else {
 						if (ctx.hasUI) ctx.ui.notify("Usage: /voice mode <paste|send>", "error");
@@ -481,7 +517,7 @@ export default function voiceExtension(pi: ExtensionAPI) {
 					const key = parts.slice(1).join("+").toLowerCase();
 					if (key) {
 						config.shortcut = key;
-						await persistConfig(config.lang, config.mode, providerName, config.shortcut);
+						await persistConfig(ctx.cwd, config.lang, config.mode, providerName, config.shortcut);
 						if (ctx.hasUI) ctx.ui.notify(`Voice shortcut: ${key}\nRun /reload for it to take effect.`, "info");
 					} else {
 						if (ctx.hasUI) ctx.ui.notify(`Voice shortcut: ${config.shortcut}\nUsage: /voice shortcut <key> (e.g. ctrl+alt+v)`, "info");
@@ -497,6 +533,7 @@ export default function voiceExtension(pi: ExtensionAPI) {
 						`Shortcut : ${config.shortcut} (active: ${activeShortcut})`,
 						`State    : ${state}`,
 						`Recorder : ${recorder?.constructor.name ?? "none"}`,
+						`Config   : ${getSettingsPath()}#${VOICE_SETTINGS_KEY}`,
 					];
 					if (ctx.hasUI) ctx.ui.notify(lines.join("\n"), "info");
 					break;
@@ -519,7 +556,7 @@ export default function voiceExtension(pi: ExtensionAPI) {
 	pi.on("session_start", async (_event, ctx) => {
 		await fancyFooterReady;
 		// Load persisted config (takes priority over env vars)
-		const saved = await loadSavedConfig();
+		const saved = await loadSavedConfig(ctx.cwd);
 		if (saved.lang) config.lang = saved.lang;
 		if (saved.mode) config.mode = saved.mode;
 		if (saved.shortcut) config.shortcut = saved.shortcut;
